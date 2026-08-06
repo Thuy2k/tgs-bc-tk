@@ -40,10 +40,17 @@ class TGS_BCTK_Report
      * của site khác, rẻ hơn nhiều so với switch (switch phải nạp lại option,
      * cache, user caps của site đó).
      *
-     * @param int $blog_id
-     * @param array $zones Lọc theo phân kho; rỗng = lấy tất cả
+     * @param int   $blog_id
+     * @param array $zones          Lọc theo phân kho; rỗng = lấy tất cả
+     * @param bool  $group_by_zone  Gộp thêm theo phân kho hay không.
+     *
+     * $group_by_zone chỉ nên bật cho site KHO. Site shop không chia phân kho:
+     * dữ liệu của shop thường để trống cột phân kho, nhưng lác đác vài dòng lại
+     * có giá trị (nhập nhầm, hoặc phiếu chuyển từ kho về còn giữ mã kho nguồn).
+     * Gộp theo phân kho ở shop sẽ tách cùng một mã hàng thành nhiều dòng, mà
+     * nhãn hiển thị đều là tên shop — nhìn y hệt dòng trùng lặp.
      */
-    public static function site_stock_rows($blog_id, array $zones = [])
+    public static function site_stock_rows($blog_id, array $zones = [], $group_by_zone = true)
     {
         global $wpdb;
 
@@ -125,10 +132,20 @@ class TGS_BCTK_Report
 
         $where_sql = implode(' AND ', $where);
 
+        /*
+         * Site kho: gộp theo (mã hàng, phân kho) để tách được từng phân kho.
+         * Site shop: gộp theo mã hàng thôi, trả zone rỗng — mọi dòng của shop
+         * đều thuộc về chính shop đó, bất kể cột phân kho đang mang giá trị gì.
+         */
+        $zone_select  = $group_by_zone
+            ? "COALESCE(NULLIF(li.local_ledger_item_warehouse_zone, ''), '') AS zone"
+            : "'' AS zone";
+        $zone_groupby = $group_by_zone ? ', zone' : '';
+
         $sql = "
             SELECT
                 li.local_product_sku AS sku,
-                COALESCE(NULLIF(li.local_ledger_item_warehouse_zone, ''), '') AS zone,
+                {$zone_select},
                 COALESCE(SUM(CASE
                     WHEN l.local_ledger_approver_status = %d THEN
                         CASE
@@ -141,7 +158,7 @@ class TGS_BCTK_Report
             FROM {$item_table} li
             LEFT JOIN {$ledger_table} l ON l.local_ledger_id = li.local_ledger_id
             WHERE {$where_sql}
-            GROUP BY li.local_product_sku, zone
+            GROUP BY li.local_product_sku{$zone_groupby}
         ";
 
         $rows = $wpdb->get_results($wpdb->prepare($sql, ...$params), ARRAY_A) ?: [];

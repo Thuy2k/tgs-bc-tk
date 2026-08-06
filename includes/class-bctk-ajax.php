@@ -77,7 +77,17 @@ class TGS_BCTK_Ajax
          * cột phân kho, truyền bộ lọc vào sẽ ra rỗng. Phân kho chỉ có nghĩa với
          * site kho.
          */
-        $stock_rows = TGS_BCTK_Report::site_stock_rows($blog_id, $is_warehouse ? $zones : []);
+        /*
+         * Chỉ site KHO mới lọc và gộp theo phân kho. Site shop gộp thẳng theo
+         * mã hàng — nếu gộp theo phân kho thì cùng một mã ở shop bị tách thành
+         * nhiều dòng (do lác đác dòng có mã kho sót lại từ phiếu chuyển), mà
+         * nhãn hiển thị đều là tên shop nên nhìn như dòng trùng lặp.
+         */
+        $stock_rows = TGS_BCTK_Report::site_stock_rows(
+            $blog_id,
+            $is_warehouse ? $zones : [],
+            $is_warehouse
+        );
         if (empty($stock_rows)) {
             return ['rows' => [], 'site' => $site];
         }

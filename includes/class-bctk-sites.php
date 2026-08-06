@@ -84,22 +84,53 @@ class TGS_BCTK_Sites
     {
         global $wpdb;
 
+        /*
+         * NGUỒN DANH SÁCH LÀ CẤU HÌNH PHÂN CẤP, KHÔNG PHẢI wp_blogs.
+         *
+         * wp_blogs chứa MỌI site từng tạo trên multisite — gồm cả site rác, site
+         * thử nghiệm, site dựng dở. Đưa hết vào bộ lọc thì người dùng phải tự
+         * đoán cái nào là chi nhánh thật.
+         *
+         * "Cấu trúc phân cấp Multisite" (Tổng – Chi nhánh – Kho – Cửa hàng) mới
+         * là nơi khai báo chính thức, nên chỉ site có mặt ở đó mới được liệt kê.
+         */
+        $h = self::hierarchy();
+        if (empty($h['sites'])) {
+            return []; // chưa khai báo gì thì không đoán bừa
+        }
+
         $has_code = (bool) $wpdb->get_results("SHOW COLUMNS FROM {$wpdb->blogs} LIKE 'tgs_site_code'");
         $code_col = $has_code ? 'tgs_site_code' : "'' AS tgs_site_code";
 
+        /*
+         * Vẫn đọc wp_blogs, nhưng để lấy MÃ SITE và ĐỐI CHIẾU blog còn sống.
+         * Cấu hình có thể còn sót site đã bị xoá hoặc lưu trữ; truy vấn vào bảng
+         * của site đó sẽ lỗi, nên loại ra trước.
+         */
         $rows = $wpdb->get_results(
             "SELECT blog_id, {$code_col} FROM {$wpdb->blogs}
-              WHERE archived = '0' AND deleted = '0' AND spam = '0'
-              ORDER BY blog_id ASC"
+              WHERE archived = '0' AND deleted = '0' AND spam = '0'"
         );
 
-        $h = self::hierarchy();
+        $alive = [];
+        foreach ($rows as $r) {
+            $alive[(int) $r->blog_id] = trim((string) ($r->tgs_site_code ?? ''));
+        }
+
         $out = [];
 
-        foreach ($rows as $r) {
-            $bid  = (int) $r->blog_id;
-            $code = trim((string) ($r->tgs_site_code ?? ''));
-            $name = $h['sites'][$bid]['name'] ?? get_blog_option($bid, 'blogname', 'Site #' . $bid);
+        foreach ($h['sites'] as $bid => $info) {
+            $bid = (int) $bid;
+
+            if (!array_key_exists($bid, $alive)) {
+                continue; // có khai báo nhưng blog không còn
+            }
+            if (($info['status'] ?? 'active') === 'inactive') {
+                continue; // đã ngừng hoạt động
+            }
+
+            $code = $alive[$bid];
+            $name = $info['name'] ?? get_blog_option($bid, 'blogname', 'Site #' . $bid);
 
             $out[] = [
                 'blog_id'   => $bid,
@@ -109,9 +140,13 @@ class TGS_BCTK_Sites
                 'label'     => $code !== '' ? $code . ' — ' . $name : $name,
                 'type'      => self::is_warehouse($bid) ? 'warehouse' : 'shop',
                 'parent_id' => isset($h['parent'][$bid]) ? (int) $h['parent'][$bid] : 0,
-                'status'    => $h['sites'][$bid]['status'] ?? 'active',
+                'status'    => $info['status'] ?? 'active',
             ];
         }
+
+        usort($out, static function ($a, $b) {
+            return $a['blog_id'] - $b['blog_id'];
+        });
 
         return $out;
     }
