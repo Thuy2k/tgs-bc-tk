@@ -314,7 +314,13 @@ class TGS_BCTK_Report
                     AND l.local_ledger_parent_id IS NULL
                     THEN COALESCE(li.quantity, 0) ELSE 0 END), 0) AS dc_signed,
 
-                COALESCE(SUM({$delta}), 0) AS ton_cuoi
+                /*
+                 * Tồn cuối = tồn tính ĐẾN HẾT NGÀY CUỐI KỲ, không phải tồn hiện
+                 * tại. Cộng hết mọi phát sinh thì lọc một khoảng trong quá khứ
+                 * sẽ ra tồn của hôm nay — sai kỳ, và kéo theo tồn đầu sai luôn
+                 * vì tồn đầu suy ngược từ nó.
+                 */
+                COALESCE(SUM(CASE WHEN li.created_at <= %s THEN {$delta} ELSE 0 END), 0) AS ton_cuoi
 
             FROM {$item_table} li
             LEFT JOIN {$ledger_table} l ON l.local_ledger_id = li.local_ledger_id
@@ -324,14 +330,21 @@ class TGS_BCTK_Report
         ";
 
         /*
-         * Thứ tự tham số phải khớp thứ tự %s xuất hiện trong câu SQL: 8 cặp
-         * ngày ở phần SELECT trước, rồi mới tới danh sách mã kho ở WHERE.
+         * Thứ tự tham số phải khớp CHÍNH XÁC thứ tự %s xuất hiện trong câu SQL:
+         *   1. 8 cặp (from, to) — 8 cột thống kê phát sinh trong kỳ
+         *   2. 1 giá trị $to     — cột tồn cuối (tính đến hết ngày cuối kỳ)
+         *   3. danh sách mã kho  — ở mệnh đề WHERE
+         *
+         * Thêm/bớt cột có %s mà quên sửa chỗ này là toàn bộ tham số lệch một
+         * nhịp: ngày chui vào chỗ mã kho, số liệu sai mà không báo lỗi gì.
          */
         $params = [];
         for ($i = 0; $i < 8; $i++) {
             $params[] = $from;
             $params[] = $to;
         }
+        $params[] = $to;
+
         foreach ($real as $z) {
             $params[] = (string) $z;
         }
