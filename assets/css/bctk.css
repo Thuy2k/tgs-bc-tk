@@ -414,3 +414,11 @@
 /* Tồn cuối là con số người ta tìm đầu tiên — cho nổi hẳn như bản gốc */
 .bctk-table th.col-close, .bctk-table td.col-close { background: #fdeaea; }
 .bctk-table td.col-close { color: #c00000; font-weight: 700; }
+
+/* "Nhập lại" (khách trả về — cộng kho) tô khác hẳn "Xuất trả" (trả NCC — trừ
+   kho). Hai tên gần giống nhau nên màu là thứ chặn đọc nhầm nhanh nhất. */
+.bctk-table th.col-inret, .bctk-table td.col-inret { background: #e6f4ea; }
+
+/* Cột "Khác" — phần dư chưa phân loại. Tô xám trung tính: có số ở đây nghĩa là
+   xuất hiện loại phiếu chưa khai báo cột, cần xem lại chứ không phải lỗi. */
+.bctk-table th.col-other, .bctk-table td.col-other { background: #f1f3f5; color: #6b7280; }

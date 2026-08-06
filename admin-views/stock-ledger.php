@@ -44,12 +44,26 @@ $bctk_today = current_time('Y-m-d');
                     <tr>
                         <th class="c-sku">Mã hàng</th>
                         <th class="c-name">Tên hàng</th>
+                        <?php
+                        /*
+                         * Thứ tự cột: tồn đầu → nhóm CỘNG kho → nhóm TRỪ kho →
+                         * tồn cuối. Đọc ngang một dòng là thấy được dòng chảy
+                         * hàng, giống cách phần mềm cũ xếp.
+                         *
+                         * "Nhập lại" và "Xuất trả" nghe gần giống nhau nhưng
+                         * NGƯỢC CHIỀU kho, nên đặt hẳn ở hai nhóm khác nhau và
+                         * tô màu khác nhau cho khỏi đọc nhầm.
+                         */
+                        ?>
                         <th class="c-num col-open">Σ tồn đầu</th>
                         <th class="c-num col-in">Σ nhập</th>
+                        <th class="c-num col-inret"
+                            title="Khách hoàn trả lại cửa hàng — tồn TĂNG">Σ nhập lại</th>
                         <th class="c-num col-inb">Σ nhập nội bộ</th>
-                        <th class="c-num col-ret">Σ xuất trả</th>
-                        <th class="c-num col-sell">Σ xuất bán</th>
                         <th class="c-num col-outb">Σ xuất nội bộ</th>
+                        <th class="c-num col-sell">Σ xuất bán</th>
+                        <th class="c-num col-ret"
+                            title="Kho trả hàng về nhà cung cấp — tồn GIẢM">Σ xuất trả</th>
                         <?php
                         /*
                          * Hai cột này nhìn giống nhau nhưng khác bản chất:
@@ -65,13 +79,15 @@ $bctk_today = current_time('Y-m-d');
                             title="Độ lớn phần xuất điều chỉnh (luôn dương, bản chất là trừ kho)">Σ xuất điều chỉnh</th>
                         <th class="c-num col-adj"
                             title="Giữ nguyên dấu: dương là tăng kho, âm là giảm — cộng thẳng vào tồn được">SL điều chỉnh (±)</th>
+                        <th class="c-num col-other"
+                            title="Phát sinh chưa được phân loại vào cột nào — luôn cộng vào để sổ cân">Khác</th>
                         <th class="c-num col-close">Σ tồn cuối</th>
                         <th class="c-unit">ĐVT</th>
                     </tr>
                 </thead>
                 <tbody id="bctkBody">
                     <tr class="bctk-empty">
-                        <td colspan="12">Chọn chi nhánh bên trái rồi bấm <strong>Tìm kiếm</strong>.</td>
+                        <td colspan="14">Chọn chi nhánh bên trái rồi bấm <strong>Tìm kiếm</strong>.</td>
                     </tr>
                 </tbody>
                 <tfoot id="bctkFoot" class="bctk-hidden">
@@ -79,12 +95,14 @@ $bctk_today = current_time('Y-m-d');
                         <td colspan="2">Tổng cộng</td>
                         <td class="c-num" id="fOpen">0</td>
                         <td class="c-num" id="fIn">0</td>
+                        <td class="c-num" id="fInRet">0</td>
                         <td class="c-num" id="fInb">0</td>
-                        <td class="c-num" id="fRet">0</td>
-                        <td class="c-num" id="fSell">0</td>
                         <td class="c-num" id="fOutb">0</td>
+                        <td class="c-num" id="fSell">0</td>
+                        <td class="c-num" id="fRet">0</td>
                         <td class="c-num" id="fAdj">0</td>
                         <td class="c-num" id="fAdjS">0</td>
+                        <td class="c-num" id="fOther">0</td>
                         <td class="c-num" id="fClose">0</td>
                         <td></td>
                     </tr>
@@ -121,12 +139,13 @@ $bctk_today = current_time('Y-m-d');
                 if (!m) {
                     m = map[r.sku] = {
                         sku: r.sku, name: r.name, unit: r.unit,
-                        ton_dau: 0, nhap: 0, nhap_nb: 0, xuat_tra: 0,
-                        xuat_ban: 0, xuat_nb: 0, xuat_dc: 0, dc_signed: 0, ton_cuoi: 0
+                        ton_dau: 0, nhap: 0, nhap_lai: 0, nhap_nb: 0,
+                        xuat_nb: 0, xuat_ban: 0, xuat_tra: 0,
+                        xuat_dc: 0, dc_signed: 0, khac: 0, ton_cuoi: 0
                     };
                     order.push(m);
                 }
-                ['ton_dau','nhap','nhap_nb','xuat_tra','xuat_ban','xuat_nb','xuat_dc','dc_signed','ton_cuoi']
+                ['ton_dau','nhap','nhap_lai','nhap_nb','xuat_nb','xuat_ban','xuat_tra','xuat_dc','dc_signed','khac','ton_cuoi']
                     .forEach(function (k) { m[k] += (r[k] || 0); });
 
                 if (!m.name && r.name) { m.name = r.name; }
@@ -155,32 +174,37 @@ $bctk_today = current_time('Y-m-d');
                     + '<td class="c-name">' + B.esc(r.name) + '</td>'
                     + n(r.ton_dau, 'col-open')
                     + n(r.nhap, 'col-in')
+                    + n(r.nhap_lai, 'col-inret')
                     + n(r.nhap_nb, 'col-inb')
-                    + n(r.xuat_tra, 'col-ret')
-                    + n(r.xuat_ban, 'col-sell')
                     + n(r.xuat_nb, 'col-outb')
+                    + n(r.xuat_ban, 'col-sell')
+                    + n(r.xuat_tra, 'col-ret')
                     + n(r.xuat_dc, 'col-adj')
                     + n(r.dc_signed, 'col-adj')
+                    + n(r.khac, 'col-other')
                     + n(r.ton_cuoi, 'col-close')
                     + '<td class="c-unit">' + B.esc(r.unit) + '</td>'
                     + '</tr>';
             }).join('');
 
-            $('#bctkBody').html(html || '<tr class="bctk-empty"><td colspan="12">Không có phát sinh trong khoảng ngày đã chọn.</td></tr>');
+            $('#bctkBody').html(html || '<tr class="bctk-empty"><td colspan="14">Không có phát sinh trong khoảng ngày đã chọn.</td></tr>');
         }, function (visible) {
-            var t = { ton_dau:0, nhap:0, nhap_nb:0, xuat_tra:0, xuat_ban:0, xuat_nb:0, xuat_dc:0, dc_signed:0, ton_cuoi:0 };
+            var t = { ton_dau:0, nhap:0, nhap_lai:0, nhap_nb:0, xuat_nb:0,
+                      xuat_ban:0, xuat_tra:0, xuat_dc:0, dc_signed:0, khac:0, ton_cuoi:0 };
             visible.forEach(function (r) {
                 Object.keys(t).forEach(function (k) { t[k] += (r[k] || 0); });
             });
 
             $('#fOpen').text(B.fmt(t.ton_dau));
             $('#fIn').text(B.fmt(t.nhap));
+            $('#fInRet').text(B.fmt(t.nhap_lai));
             $('#fInb').text(B.fmt(t.nhap_nb));
-            $('#fRet').text(B.fmt(t.xuat_tra));
-            $('#fSell').text(B.fmt(t.xuat_ban));
             $('#fOutb').text(B.fmt(t.xuat_nb));
+            $('#fSell').text(B.fmt(t.xuat_ban));
+            $('#fRet').text(B.fmt(t.xuat_tra));
             $('#fAdj').text(B.fmt(t.xuat_dc));
             $('#fAdjS').text(B.fmt(t.dc_signed));
+            $('#fOther').text(B.fmt(t.khac));
             $('#fClose').text(B.fmt(t.ton_cuoi));
         });
     });

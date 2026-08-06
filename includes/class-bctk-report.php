@@ -180,14 +180,35 @@ class TGS_BCTK_Report
      *
      * ─── Cách phân loại (theo đúng nghiệp vụ) ───────────────────────────────
      *
-     *   Nhập (mua NCC)   item_type=1, phiếu KHÔNG có cha
-     *   Nhập nội bộ      item_type=1, cha là phiếu mua nội bộ  (type 13)
-     *   Xuất bán         item_type=2, cha là phiếu bán hàng    (type 10)
-     *   Xuất nội bộ      item_type=2, cha là phiếu bán nội bộ  (type 12)
-     *   Xuất điều chỉnh  item_type=2, phiếu KHÔNG có cha
-     *   Xuất trả         item_type=3  (khách hoàn trả lại cửa hàng)
+     *   CỘNG KHO
+     *     Nhập (mua NCC)   item_type=1, phiếu KHÔNG có cha
+     *                      — nhập từ nhà cung cấp có hoá đơn đỏ
+     *     Nhập lại         item_type=3  — khách hoàn trả lại cửa hàng
+     *     Nhập nội bộ      item_type=1, cha là phiếu mua nội bộ    (type 13)
+     *
+     *   TRỪ KHO
+     *     Xuất nội bộ      item_type=2, cha là phiếu bán nội bộ    (type 12)
+     *     Xuất bán         item_type=2, cha là phiếu bán hàng      (type 10)
+     *     Xuất trả         item_type=2, cha là phiếu trả NCC       (type 16)
+     *                      — KHO trả hàng về nhà cung cấp
+     *     Xuất điều chỉnh  item_type=2, phiếu KHÔNG có cha
+     *
+     *   Khác                phần dư, xem chú thích ở chỗ tính $classified
      *
      * Mọi phiếu đều phải ĐÃ DUYỆT.
+     *
+     * ĐỪNG NHẦM HAI CÁI NÀY — tên gần giống nhau nhưng ngược chiều kho, và
+     * chủ thể cũng khác nhau:
+     *   Nhập lại = KHÁCH trả hàng về cửa hàng   → tồn TĂNG  (item_type 3)
+     *   Xuất trả = KHO trả hàng về nhà cung cấp → tồn GIẢM  (item_type 2, cha 16)
+     *
+     * Chỉ KHO mới trả hàng cho NCC. Cửa hàng chỉ nhận hàng từ kho hoặc shop
+     * khác, rồi bán cho khách — không làm việc trực tiếp với nhà cung cấp.
+     *
+     * Trước khi có cột Xuất trả, phiếu trả NCC không rơi vào cột nào: nó CÓ
+     * cha nên không phải xuất điều chỉnh, mà cha lại không phải 10 hay 12.
+     * Số vẫn nằm trong tồn cuối nhưng không hiện ở cột phân loại nào — sổ nhìn
+     * như bị hụt mà không rõ hụt ở đâu.
      *
      * ─── Tồn đầu tính thế nào ───────────────────────────────────────────────
      *
@@ -280,10 +301,31 @@ class TGS_BCTK_Report
 
                 COALESCE(SUM(CASE WHEN {$in_range} THEN {$delta} ELSE 0 END), 0) AS net_period,
 
+                /*
+                 * Nhập = nhập từ NCC có hoá đơn đỏ → phiếu nhập KHÔNG có cha.
+                 *
+                 * CỐ Ý KHÔNG tính phiếu nhập sinh từ phiếu mua hàng (cha type 9).
+                 * Luồng đó đã bỏ: phiếu mua hàng nay chỉ là bản nháp đặt hàng gửi
+                 * NCC, việc đẩy hàng do plugin tgs_purchase_management lo riêng,
+                 * không sinh nhập kho nữa.
+                 *
+                 * Dữ liệu cũ từ luồng đã bỏ sẽ rơi vào cột Khac — đúng ý đồ:
+                 * nó là phát sinh có thật, vẫn nằm trong tồn, nhưng không thuộc
+                 * loại nghiệp vụ nào đang dùng nên phải nhìn thấy được.
+                 *
+                 * (Chú thích trong khối này KHÔNG được dùng dấu nháy kép: cả câu
+                 *  SQL nằm trong một chuỗi nháy kép của PHP, chỉ một dấu nháy
+                 *  kép lạc vào là đóng chuỗi sớm và cả file lỗi cú pháp.)
+                 */
                 COALESCE(SUM(CASE WHEN {$in_range}
                     AND li.local_ledger_item_type = {$I}
                     AND l.local_ledger_parent_id IS NULL
                     THEN ABS(li.quantity) ELSE 0 END), 0) AS nhap,
+
+                /* Nhập lại: khách hoàn trả về cửa hàng → tồn TĂNG */
+                COALESCE(SUM(CASE WHEN {$in_range}
+                    AND li.local_ledger_item_type = {$R}
+                    THEN ABS(li.quantity) ELSE 0 END), 0) AS nhap_lai,
 
                 COALESCE(SUM(CASE WHEN {$in_range}
                     AND li.local_ledger_item_type = {$I}
@@ -300,8 +342,11 @@ class TGS_BCTK_Report
                     AND p.local_ledger_type = 12
                     THEN ABS(li.quantity) ELSE 0 END), 0) AS xuat_nb,
 
+                /* Xuất trả: KHO trả hàng về NCC → tồn GIẢM.
+                   KHÔNG phải item_type=3 — cái đó là khách trả về, cộng kho. */
                 COALESCE(SUM(CASE WHEN {$in_range}
-                    AND li.local_ledger_item_type = {$R}
+                    AND li.local_ledger_item_type = {$E}
+                    AND p.local_ledger_type = 16
                     THEN ABS(li.quantity) ELSE 0 END), 0) AS xuat_tra,
 
                 COALESCE(SUM(CASE WHEN {$in_range}
@@ -331,7 +376,9 @@ class TGS_BCTK_Report
 
         /*
          * Thứ tự tham số phải khớp CHÍNH XÁC thứ tự %s xuất hiện trong câu SQL:
-         *   1. 8 cặp (from, to) — 8 cột thống kê phát sinh trong kỳ
+         *   1. 9 cặp (from, to) — 9 cột thống kê phát sinh trong kỳ:
+         *      net_period, nhap, nhap_lai, nhap_nb, xuat_ban, xuat_nb,
+         *      xuat_tra, xuat_dc, dc_signed
          *   2. 1 giá trị $to     — cột tồn cuối (tính đến hết ngày cuối kỳ)
          *   3. danh sách mã kho  — ở mệnh đề WHERE
          *
@@ -339,7 +386,7 @@ class TGS_BCTK_Report
          * nhịp: ngày chui vào chỗ mã kho, số liệu sai mà không báo lỗi gì.
          */
         $params = [];
-        for ($i = 0; $i < 8; $i++) {
+        for ($i = 0; $i < 9; $i++) {
             $params[] = $from;
             $params[] = $to;
         }
@@ -355,16 +402,44 @@ class TGS_BCTK_Report
             $ton_cuoi = (float) $r['ton_cuoi'];
             $net      = (float) $r['net_period'];
 
+            /*
+             * ─── CỘT "KHÁC" LÀ PHẦN DƯ, KHÔNG PHẢI MỘT LOẠI PHIẾU ───────────
+             *
+             * = phát sinh ròng thật − tổng ảnh hưởng của các cột đã phân loại.
+             *
+             * Nhờ nó, đẳng thức sau LUÔN đúng theo cách dựng, không phụ thuộc
+             * việc đã liệt kê đủ loại phiếu hay chưa:
+             *
+             *   tồn đầu + nhập + nhập lại + nhập NB
+             *           − xuất NB − xuất bán − xuất trả − xuất điều chỉnh
+             *           + khác  =  tồn cuối
+             *
+             * Mai kia hệ thống thêm loại phiếu mới mà chưa kịp khai báo cột,
+             * lượng đó rơi vào "Khác" — sổ vẫn cân và người xem THẤY được là có
+             * thứ chưa phân loại. Không có cột này thì phần đó biến mất khỏi
+             * các cột nhưng vẫn nằm trong tồn cuối, sổ lệch mà không rõ vì sao
+             * (đúng lỗi vừa gặp: hàng nhập qua phiếu mua hàng làm lệch 29).
+             */
+            $classified = (float) $r['nhap']
+                        + (float) $r['nhap_lai']
+                        + (float) $r['nhap_nb']
+                        - (float) $r['xuat_nb']
+                        - (float) $r['xuat_ban']
+                        - (float) $r['xuat_tra']
+                        - (float) $r['xuat_dc'];
+
             return [
                 'sku'       => (string) $r['sku'],
                 'ton_dau'   => $ton_cuoi - $net,   // suy ngược từ tồn cuối
                 'nhap'      => (float) $r['nhap'],
+                'nhap_lai'  => (float) $r['nhap_lai'],
                 'nhap_nb'   => (float) $r['nhap_nb'],
                 'xuat_ban'  => (float) $r['xuat_ban'],
                 'xuat_nb'   => (float) $r['xuat_nb'],
                 'xuat_tra'  => (float) $r['xuat_tra'],
                 'xuat_dc'   => (float) $r['xuat_dc'],
                 'dc_signed' => (float) $r['dc_signed'],
+                'khac'      => $net - $classified,
                 'ton_cuoi'  => $ton_cuoi,
             ];
         }, $rows);
