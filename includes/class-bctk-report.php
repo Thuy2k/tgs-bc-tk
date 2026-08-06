@@ -173,6 +173,191 @@ class TGS_BCTK_Report
     }
 
     /**
+     * SỔ KHO theo mặt hàng — phát sinh trong khoảng ngày, gộp theo mã hàng.
+     *
+     * KHÔNG chia theo phân kho: báo cáo này cộng dồn toàn bộ site đã lọc.
+     * Bộ lọc mã kho bên trái vẫn dùng để chọn phạm vi, nhưng kết quả gộp lại.
+     *
+     * ─── Cách phân loại (theo đúng nghiệp vụ) ───────────────────────────────
+     *
+     *   Nhập (mua NCC)   item_type=1, phiếu KHÔNG có cha
+     *   Nhập nội bộ      item_type=1, cha là phiếu mua nội bộ  (type 13)
+     *   Xuất bán         item_type=2, cha là phiếu bán hàng    (type 10)
+     *   Xuất nội bộ      item_type=2, cha là phiếu bán nội bộ  (type 12)
+     *   Xuất điều chỉnh  item_type=2, phiếu KHÔNG có cha
+     *   Xuất trả         item_type=3  (khách hoàn trả lại cửa hàng)
+     *
+     * Mọi phiếu đều phải ĐÃ DUYỆT.
+     *
+     * ─── Tồn đầu tính thế nào ───────────────────────────────────────────────
+     *
+     * tồn đầu = tồn cuối − (phát sinh ròng trong kỳ)
+     *
+     * "Phát sinh ròng" dùng ĐÚNG biểu thức CASE của công thức tồn, không phải
+     * cộng trừ từng cột hiển thị. Cộng tay từng cột thì chỉ cần sót một loại
+     * phiếu (hoặc đếm trùng một loại) là tồn đầu lệch, mà lệch kiểu đó rất khó
+     * phát hiện vì con số vẫn trông hợp lý.
+     *
+     * @param string $date_from 'Y-m-d'
+     * @param string $date_to   'Y-m-d'
+     */
+    public static function site_ledger_rows($blog_id, array $zones, $group_by_zone, $date_from, $date_to)
+    {
+        global $wpdb;
+
+        $blog_id = (int) $blog_id;
+        if ($blog_id <= 0) {
+            return [];
+        }
+
+        $custom = apply_filters('tgs_bctk_site_ledger_rows', null, $blog_id, $zones, $date_from, $date_to);
+        if (is_array($custom)) {
+            return $custom;
+        }
+
+        $prefix       = $wpdb->get_blog_prefix($blog_id);
+        $item_table   = $prefix . 'local_ledger_item';
+        $ledger_table = $prefix . 'local_ledger';
+
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $item_table)) !== $item_table) {
+            return [];
+        }
+
+        // Chặn hai đầu ngày: từ 00:00:00 tới 23:59:59
+        $from = $date_from . ' 00:00:00';
+        $to   = $date_to . ' 23:59:59';
+
+        $A = self::APPROVER_STATUS_APPROVED;
+        $I = self::ITEM_TYPE_IMPORT;
+        $E = self::ITEM_TYPE_EXPORT;
+        $R = 3;  // khách hoàn trả
+        $PO = self::ITEM_TYPE_PURCHASE_ORDER;
+
+        /* Biểu thức tồn — giống hệt site_stock_rows(), giữ khớp tuyệt đối */
+        $delta = "CASE
+                    WHEN li.local_ledger_item_type = {$I} THEN  ABS(li.quantity)
+                    WHEN li.local_ledger_item_type = {$E} THEN -ABS(li.quantity)
+                    ELSE COALESCE(li.quantity, 0)
+                  END";
+
+        $in_range = "li.created_at BETWEEN %s AND %s";
+
+        $where = [
+            "li.local_product_sku IS NOT NULL",
+            "li.local_product_sku <> ''",
+            "(li.is_deleted = 0 OR li.is_deleted IS NULL)",
+            "(l.is_deleted = 0 OR l.is_deleted IS NULL)",
+            "(li.local_ledger_item_type IS NULL OR li.local_ledger_item_type <> {$PO})",
+            "l.local_ledger_approver_status = {$A}",
+        ];
+
+        if ($group_by_zone && !empty($zones)) {
+            $want_none = in_array(TGS_BCTK_Sites::ZONE_NONE, $zones, true);
+            $real      = array_values(array_filter($zones, static function ($z) {
+                return $z !== TGS_BCTK_Sites::ZONE_NONE;
+            }));
+            $parts = [];
+            if (!empty($real)) {
+                $parts[] = "li.local_ledger_item_warehouse_zone IN ("
+                         . implode(',', array_fill(0, count($real), '%s')) . ")";
+            }
+            if ($want_none) {
+                $parts[] = "(li.local_ledger_item_warehouse_zone IS NULL"
+                         . " OR li.local_ledger_item_warehouse_zone = '')";
+            }
+            if ($parts) {
+                $where[] = '(' . implode(' OR ', $parts) . ')';
+            }
+        } else {
+            $real = [];
+        }
+
+        $where_sql = implode(' AND ', $where);
+
+        $sql = "
+            SELECT
+                li.local_product_sku AS sku,
+
+                COALESCE(SUM(CASE WHEN {$in_range} THEN {$delta} ELSE 0 END), 0) AS net_period,
+
+                COALESCE(SUM(CASE WHEN {$in_range}
+                    AND li.local_ledger_item_type = {$I}
+                    AND l.local_ledger_parent_id IS NULL
+                    THEN ABS(li.quantity) ELSE 0 END), 0) AS nhap,
+
+                COALESCE(SUM(CASE WHEN {$in_range}
+                    AND li.local_ledger_item_type = {$I}
+                    AND p.local_ledger_type = 13
+                    THEN ABS(li.quantity) ELSE 0 END), 0) AS nhap_nb,
+
+                COALESCE(SUM(CASE WHEN {$in_range}
+                    AND li.local_ledger_item_type = {$E}
+                    AND p.local_ledger_type = 10
+                    THEN ABS(li.quantity) ELSE 0 END), 0) AS xuat_ban,
+
+                COALESCE(SUM(CASE WHEN {$in_range}
+                    AND li.local_ledger_item_type = {$E}
+                    AND p.local_ledger_type = 12
+                    THEN ABS(li.quantity) ELSE 0 END), 0) AS xuat_nb,
+
+                COALESCE(SUM(CASE WHEN {$in_range}
+                    AND li.local_ledger_item_type = {$R}
+                    THEN ABS(li.quantity) ELSE 0 END), 0) AS xuat_tra,
+
+                COALESCE(SUM(CASE WHEN {$in_range}
+                    AND li.local_ledger_item_type = {$E}
+                    AND l.local_ledger_parent_id IS NULL
+                    THEN ABS(li.quantity) ELSE 0 END), 0) AS xuat_dc,
+
+                COALESCE(SUM(CASE WHEN {$in_range}
+                    AND li.local_ledger_item_type = {$E}
+                    AND l.local_ledger_parent_id IS NULL
+                    THEN COALESCE(li.quantity, 0) ELSE 0 END), 0) AS dc_signed,
+
+                COALESCE(SUM({$delta}), 0) AS ton_cuoi
+
+            FROM {$item_table} li
+            LEFT JOIN {$ledger_table} l ON l.local_ledger_id = li.local_ledger_id
+            LEFT JOIN {$ledger_table} p ON p.local_ledger_id = l.local_ledger_parent_id
+            WHERE {$where_sql}
+            GROUP BY li.local_product_sku
+        ";
+
+        /*
+         * Thứ tự tham số phải khớp thứ tự %s xuất hiện trong câu SQL: 8 cặp
+         * ngày ở phần SELECT trước, rồi mới tới danh sách mã kho ở WHERE.
+         */
+        $params = [];
+        for ($i = 0; $i < 8; $i++) {
+            $params[] = $from;
+            $params[] = $to;
+        }
+        foreach ($real as $z) {
+            $params[] = (string) $z;
+        }
+
+        $rows = $wpdb->get_results($wpdb->prepare($sql, ...$params), ARRAY_A) ?: [];
+
+        return array_map(static function ($r) {
+            $ton_cuoi = (float) $r['ton_cuoi'];
+            $net      = (float) $r['net_period'];
+
+            return [
+                'sku'       => (string) $r['sku'],
+                'ton_dau'   => $ton_cuoi - $net,   // suy ngược từ tồn cuối
+                'nhap'      => (float) $r['nhap'],
+                'nhap_nb'   => (float) $r['nhap_nb'],
+                'xuat_ban'  => (float) $r['xuat_ban'],
+                'xuat_nb'   => (float) $r['xuat_nb'],
+                'xuat_tra'  => (float) $r['xuat_tra'],
+                'xuat_dc'   => (float) $r['xuat_dc'],
+                'dc_signed' => (float) $r['dc_signed'],
+                'ton_cuoi'  => $ton_cuoi,
+            ];
+        }, $rows);
+    }
+
+    /**
      * Hàng đang đi đường của một site, gộp theo mã hàng.
      *
      * Quy tắc: phiếu nhập (type 1) CHƯA duyệt, phiếu cha là phiếu mua nội bộ

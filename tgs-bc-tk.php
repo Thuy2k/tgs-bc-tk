@@ -37,7 +37,17 @@ require_once TGS_BCTK_DIR . 'includes/class-bctk-ajax.php';
 class TGS_BCTK_Plugin
 {
     /** View slug — dùng lại ở cả nav, route lẫn điều kiện nạp asset */
-    const VIEW_STOCK = 'bctk-stock';
+    const VIEW_STOCK  = 'bctk-stock';
+    const VIEW_LEDGER = 'bctk-ledger';
+
+    /** Mọi view của BC_TK — thêm màn mới chỉ cần khai ở đây */
+    private static function views()
+    {
+        return [
+            self::VIEW_STOCK  => ['Báo cáo tồn kho', 'Tồn kho', 'bx bx-box', 'stock-report.php'],
+            self::VIEW_LEDGER => ['Sổ kho theo mặt hàng', 'Sổ kho (theo mặt hàng)', 'bx bx-book-content', 'stock-ledger.php'],
+        ];
+    }
 
     public static function init()
     {
@@ -59,16 +69,15 @@ class TGS_BCTK_Plugin
             return $workflow_nav;
         }
 
+        $items = [];
+        foreach (self::views() as $view => $meta) {
+            $items[] = ['view' => $view, 'label' => $meta[1], 'icon' => $meta[2]];
+        }
+
         $workflow_nav['purchase']['sections'][] = [
             'heading' => 'BC_TK',
             'icon'    => 'bx bx-bar-chart-square',
-            'items'   => [
-                [
-                    'view'  => self::VIEW_STOCK,
-                    'label' => 'Tồn kho',
-                    'icon'  => 'bx bx-box',
-                ],
-            ],
+            'items'   => $items,
         ];
 
         return $workflow_nav;
@@ -77,10 +86,9 @@ class TGS_BCTK_Plugin
     /** Route dùng đường dẫn tuyệt đối — plugin shop hỗ trợ sẵn kiểu này */
     public static function register_routes($routes)
     {
-        $routes[self::VIEW_STOCK] = [
-            'Báo cáo tồn kho',
-            TGS_BCTK_DIR . 'admin-views/stock-report.php',
-        ];
+        foreach (self::views() as $view => $meta) {
+            $routes[$view] = [$meta[0], TGS_BCTK_DIR . 'admin-views/' . $meta[3]];
+        }
 
         return $routes;
     }
@@ -92,7 +100,7 @@ class TGS_BCTK_Plugin
             return;
         }
         $view = isset($_GET['view']) ? sanitize_text_field(wp_unslash($_GET['view'])) : '';
-        if ($view !== self::VIEW_STOCK) {
+        if (!array_key_exists($view, self::views())) {
             return;
         }
 

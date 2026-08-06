@@ -380,3 +380,37 @@
 }
 
 .bctk-hidden { display: none !important; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   SỔ KHO THEO MẶT HÀNG
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* Ô chọn khoảng ngày nằm ngay cạnh tiêu đề bảng */
+.bctk-headline { display: flex; align-items: center; gap: 14px; }
+
+.bctk-daterange { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #475569; }
+
+.bctk-daterange input {
+    height: 26px;
+    padding: 0 6px;
+    border: 1px solid #cdd7e5;
+    border-radius: 5px;
+    font-size: 12px;
+}
+
+/*
+ * Nền màu theo nhóm cột — bám đúng cách phần mềm cũ tô, để người dùng đọc
+ * ngang một dòng là biết ngay đâu là nhập, đâu là xuất, đâu là tồn.
+ * Dùng màu rất nhạt vì bảng nhiều cột; đậm như bản gốc sẽ chói trên nền sáng.
+ */
+.bctk-table th.col-open,  .bctk-table td.col-open  { background: #f1f5f9; }
+.bctk-table th.col-in,    .bctk-table td.col-in    { background: #eaf7ee; }
+.bctk-table th.col-inb,   .bctk-table td.col-inb   { background: #fdf2e3; }
+.bctk-table th.col-ret,   .bctk-table td.col-ret   { background: #fdf7d8; }
+.bctk-table th.col-sell,  .bctk-table td.col-sell  { background: #e8eefc; }
+.bctk-table th.col-outb,  .bctk-table td.col-outb  { background: #fdeef7; }
+.bctk-table th.col-adj,   .bctk-table td.col-adj   { background: #f4f1fa; }
+
+/* Tồn cuối là con số người ta tìm đầu tiên — cho nổi hẳn như bản gốc */
+.bctk-table th.col-close, .bctk-table td.col-close { background: #fdeaea; }
+.bctk-table td.col-close { color: #c00000; font-weight: 700; }

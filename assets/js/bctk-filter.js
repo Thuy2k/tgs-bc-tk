@@ -142,13 +142,26 @@
 
     // ── Chạy báo cáo ────────────────────────────────────────────────────────
 
+    /*
+     * Trang nào dùng lại bộ lọc này thì tự đăng ký cách vẽ của mình.
+     * Không đăng ký thì dùng mặc định (báo cáo tồn kho).
+     */
+    var pageRender = null;   // function(rows)
+    var pageFooter = null;   // function(visibleRows, totalCount)
+
     function fetchSite(blogId, zones) {
-        return $.post(CFG.ajaxUrl, {
-            action: 'tgs_bctk_fetch_site',
+        var data = {
+            action: CFG.action || 'tgs_bctk_fetch_site',
             nonce: CFG.nonce,
             blog_id: blogId,
             zones: zones
-        }).then(function (res) {
+        };
+
+        /* Trang có ô chọn ngày thì gửi kèm — trang không có thì bỏ qua */
+        if ($('#bctkDateFrom').length) { data.date_from = $('#bctkDateFrom').val(); }
+        if ($('#bctkDateTo').length)   { data.date_to   = $('#bctkDateTo').val(); }
+
+        return $.post(CFG.ajaxUrl, data).then(function (res) {
             return (res && res.success && res.data && res.data.rows) ? res.data.rows : [];
         }, function () {
             return [];   // site lỗi → bỏ qua, không chặn các site còn lại
@@ -251,6 +264,14 @@
             return;
         }
 
+        /* Trang tự vẽ (sổ kho chẳng hạn) thì nhường quyền */
+        if (pageRender) {
+            pageRender(rows);
+            $('#bctkFoot').removeClass('bctk-hidden');
+            recalcFooter();
+            return;
+        }
+
         // Sắp theo số lượng giảm dần — giống phần mềm cũ, hàng nhiều nằm trên
         rows.sort(function (a, b) { return b.qty - a.qty; });
 
@@ -300,6 +321,24 @@
      * dạng nghìn và ký hiệu tiền, bóc ngược vừa chậm vừa dễ lệch.
      */
     function recalcFooter() {
+        /* Trang tự cộng dòng tổng theo cột riêng của nó */
+        if (pageFooter) {
+            var visible = [];
+            $('#bctkBody tr[data-i]').each(function () {
+                if (this.style.display === 'none') return;
+                var r = rows[parseInt(this.getAttribute('data-i'), 10)];
+                if (r) visible.push(r);
+            });
+
+            pageFooter(visible, rows.length);
+            $('#bctkRowCount').text(
+                visible.length === rows.length
+                    ? nf.format(rows.length) + ' dòng'
+                    : nf.format(visible.length) + ' / ' + nf.format(rows.length) + ' dòng (đang lọc)'
+            );
+            return;
+        }
+
         var t = { qty: 0, amount: 0, transit: 0, max: 0, min: 0, need: 0 };
         var shown = 0;
 
@@ -430,6 +469,29 @@
     window.TGSBctk = {
         getRows: function () { return rows.slice(); },
         setRows: function (r) { rows = r || []; render(); },
-        run: run
+        run: run,
+        fmt: fmt,
+        esc: esc,
+
+        /*
+         * Đăng ký cách vẽ riêng cho một trang.
+         *   renderFn(rows)                  — đổ dữ liệu vào #bctkBody, mỗi <tr>
+         *                                     phải có data-i để cộng lại được
+         *   footerFn(visibleRows, total)    — cộng dòng tổng theo cột của trang
+         */
+        setRenderer: function (renderFn, footerFn) {
+            pageRender = renderFn || null;
+            pageFooter = footerFn || null;
+        },
+
+        /*
+         * Thay dữ liệu gốc mà KHÔNG vẽ lại.
+         *
+         * Trang sổ kho gộp nhiều chi nhánh về cùng một mã hàng trước khi vẽ;
+         * sau khi gộp, mảng dòng đã khác mảng server trả về. Phần cộng dòng tổng
+         * tra ngược theo data-i nên phải trỏ vào mảng ĐÃ GỘP, không thì cộng
+         * nhầm dòng. Gọi setRows() ở đây sẽ vẽ lại lần nữa → lặp vô tận.
+         */
+        setRowsSilent: function (r) { rows = r || []; }
     };
 })(jQuery);
