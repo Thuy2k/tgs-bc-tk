@@ -487,6 +487,9 @@
     z-index: 1;
 }
 
+/* Select nơi nhận không cần rộng hết modal — dài quá lại khó nhắm */
+.bctk-po-recv { max-width: 420px; }
+
 .bctk-modal-table td.c-qty { width: 110px; }
 .bctk-modal-table td.c-qty input { width: 92px; text-align: right; }
 .bctk-modal-table td.c-note { max-width: none; width: 220px; }

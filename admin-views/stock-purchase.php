@@ -146,9 +146,33 @@ $bctk_cur_name = get_bloginfo('name');
                 <div class="modal-body">
                     <div class="alert alert-info small mb-3">
                         Loại đề xuất <b>Kho mua thêm</b> · nguồn phát sinh phiếu là
-                        <b><?php echo esc_html($bctk_cur_name); ?></b> · nguồn chuyển hàng và nguồn nhận hàng để trống.
+                        <b><?php echo esc_html($bctk_cur_name); ?></b> · không có nguồn chuyển hàng.
                         <br>Chỉnh lại <b>SL đề nghị</b> nếu cần (mặc định = gợi ý nhập).
                         Bỏ tick hoặc đặt SL = 0 để loại dòng đó khỏi phiếu.
+                    </div>
+
+                    <?php
+                    /*
+                     * Nguồn nhận hàng — chỉ đích danh chi nhánh sẽ nhận phiếu.
+                     *
+                     * Không chỉ để ghi cho biết: danh sách PO lọc mặc định theo
+                     * (request_blog_id OR transfer_blog_id OR receive_blog_id) = site
+                     * đang mở. Chọn ở đây nghĩa là chi nhánh đó MỞ RA LÀ THẤY phiếu,
+                     * bỏ trống thì chỉ site lập phiếu nhìn thấy.
+                     *
+                     * Danh sách site lấy từ cấu hình phân cấp Multisite (giống bộ lọc
+                     * trái), không phải wp_blogs — khỏi lòi ra site rác.
+                     */
+                    ?>
+                    <div class="bctk-po-recv mb-3">
+                        <label class="form-label fw-semibold mb-1" for="bctkPoRecv">Nguồn nhận hàng</label>
+                        <select id="bctkPoRecv" class="form-select form-select-sm">
+                            <option value="">— Không chọn (chỉ site lập phiếu nhìn thấy) —</option>
+                        </select>
+                        <div class="form-text">
+                            Chọn chi nhánh sẽ nhận phiếu PO này. Chi nhánh được chọn sẽ thấy phiếu
+                            trong danh sách PO của họ.
+                        </div>
                     </div>
 
                     <div class="bctk-modal-tablewrap">
@@ -395,6 +419,33 @@ $bctk_cur_name = get_bloginfo('name');
         }
 
         /*
+         * Nạp select nguồn nhận một lần. Tách Kho / Cửa hàng thành hai nhóm vì
+         * phiếu mua thêm hầu như luôn về kho — để lẫn vào danh sách 70 shop thì
+         * mỗi lần lập phiếu lại phải đi tìm.
+         */
+        function fillRecvOptions() {
+            var $s = $('#bctkPoRecv');
+            if ($s.data('filled')) { return; }
+
+            var sites = (window.TGS_BCTK && window.TGS_BCTK.sites) || [];
+            var groups = [
+                ['Kho', sites.filter(function (s) { return s.type === 'warehouse'; })],
+                ['Cửa hàng', sites.filter(function (s) { return s.type !== 'warehouse'; })]
+            ];
+
+            groups.forEach(function (g) {
+                if (!g[1].length) { return; }
+                var $og = $('<optgroup>').attr('label', g[0]);
+                g[1].forEach(function (s) {
+                    $og.append($('<option>').val(s.blog_id).text(s.label || s.name));
+                });
+                $s.append($og);
+            });
+
+            $s.data('filled', true);
+        }
+
+        /*
          * Ghi chú chung tự sinh: ghi lại BỐI CẢNH quét (kỳ nào, bao nhiêu mã),
          * thứ mà đọc phiếu sau này không còn suy ra được. Khác hẳn ghi chú từng
          * dòng ở bảng ngoài — cái đó chỉ giải thích con số gợi ý, xem tại chỗ là
@@ -437,8 +488,15 @@ $bctk_cur_name = get_bloginfo('name');
             updatePoSummary();
         }
 
+        function recvPick() {
+            var id  = parseInt($('#bctkPoRecv').val(), 10) || 0;
+            var opt = $('#bctkPoRecv option:selected');
+            return { id: id, name: id ? (opt.text() || '') : '' };
+        }
+
         function collectPoItems() {
             var out = [];
+            var recv = recvPick();
             $('#bctkPoBody tr').each(function () {
                 var $tr = $(this);
                 if (!$tr.find('.bctk-po-pick').prop('checked')) { return; }
@@ -449,18 +507,20 @@ $bctk_cur_name = get_bloginfo('name');
 
                 out.push({
                     /*
-                     * Theo yêu cầu: loại đề xuất là "kho mua thêm", nguồn phát
-                     * sinh là website đang quét, nguồn chuyển / nguồn nhận để
-                     * trống. Endpoint gom nhóm theo intent|transfer|receive nên
-                     * cả rổ này rơi vào đúng MỘT phiếu.
+                     * Loại đề xuất là "kho mua thêm", nguồn phát sinh là website
+                     * đang quét, không có nguồn chuyển. Nguồn nhận do người lập
+                     * chọn (có thể để trống).
+                     *
+                     * Endpoint gom nhóm theo intent|transfer|receive — cả rổ dùng
+                     * chung một nguồn nhận nên rơi vào đúng MỘT phiếu.
                      */
                     intent: 'warehouse_purchase_more',
                     request_blog_id: PO.blogId,
                     request_blog_name: PO.blogName,
                     transfer_blog_id: 0,
                     transfer_blog_name: '',
-                    receive_blog_id: 0,
-                    receive_blog_name: '',
+                    receive_blog_id: recv.id,
+                    receive_blog_name: recv.name,
 
                     sku: r.sku,
                     name: r.name,
@@ -484,8 +544,10 @@ $bctk_cur_name = get_bloginfo('name');
                 n++;
                 qty += v;
             });
+            var recv = recvPick();
             $('#bctkPoSummary').text(n
-                ? ('Sẽ tạo 1 phiếu · ' + n + ' mã · tổng SL ' + B.fmt(qty))
+                ? ('Sẽ tạo 1 phiếu · ' + n + ' mã · tổng SL ' + B.fmt(qty)
+                   + ' · nơi nhận: ' + (recv.id ? recv.name : 'để trống'))
                 : 'Chưa có dòng nào hợp lệ');
             $('#bctkPoConfirm').prop('disabled', n === 0);
         }
@@ -494,11 +556,13 @@ $bctk_cur_name = get_bloginfo('name');
             poRows = selectedRows();
             if (!poRows.length) { return; }
 
+            fillRecvOptions();
             renderPoRows();
             $('#bctkPoNote').val(buildCommonNote(poRows));
             poModal().show();
         });
 
+        $('#bctkPoRecv').on('change', updatePoSummary);
         $(document).on('change', '.bctk-po-pick', updatePoSummary);
         $(document).on('input change', '.bctk-po-qty', updatePoSummary);
 
