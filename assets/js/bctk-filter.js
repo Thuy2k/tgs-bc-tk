@@ -236,7 +236,6 @@
         $.when.apply($, workers).always(function () {
             running = false;
             $('#bctkSearch').prop('disabled', false);
-            $('#bctkExport').prop('disabled', rows.length === 0);
             render();
             $('#bctkProgressText').text('Xong · ' + sites.length + ' chi nhánh · ' + nf.format(rows.length) + ' dòng');
         });

@@ -103,9 +103,18 @@ $bctk_boot = TGS_BCTK_Sites::filter_bootstrap();
          */
         ?>
         <div class="bctk-filter__foot">
+            <?php
+            /*
+             * Không có nút xuất Excel ở đây.
+             *
+             * Bảng kết quả đã có sẵn nút "Xuất Excel" do Design System tự chèn
+             * (tgs-erp-ds.js), và nút đó xuất đúng những dòng đang hiển thị —
+             * kể cả sau khi lọc theo cột. Đặt thêm một nút nữa ở bộ lọc chỉ làm
+             * người dùng phân vân không biết hai nút khác nhau chỗ nào.
+             */
+            ?>
             <div class="bctk-actions">
                 <button type="button" class="bctk-btn bctk-btn--primary" id="bctkSearch">Tìm kiếm</button>
-                <button type="button" class="bctk-btn" id="bctkExport" disabled>Xuất Excel</button>
             </div>
 
             <div class="bctk-progress bctk-hidden" id="bctkProgress">
