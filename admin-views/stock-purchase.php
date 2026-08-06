@@ -21,6 +21,26 @@ if (!defined('ABSPATH')) {
 $bctk_boot  = TGS_BCTK_Sites::filter_bootstrap();
 $bctk_today = current_time('Y-m-d');
 $bctk_first = current_time('Y-m-01');
+
+/*
+ * Tạo PO đề nghị mua hàng — dùng lại nguyên endpoint của plugin
+ * tgs_po_adjustment (action tgs_poa_create, đúng cái mà màn "Quét tồn thông
+ * minh" đang gọi). Không viết lại chỗ ghi bảng để hai màn không bao giờ lệch
+ * nhau về cách sinh mã phiếu, gom nhóm hay snapshot tồn.
+ *
+ * Endpoint đó yêu cầu manage_options — KHÁC với BC_TK (đang để 'read' cho dễ
+ * phát triển). Cố ý giữ nguyên: xem báo cáo thì thoải mái, nhưng ghi phiếu ra
+ * hệ thống thì vẫn phải là người có quyền. Ai không đủ quyền sẽ không thấy nút.
+ */
+$bctk_can_po   = class_exists('TGS_POA_Ajax') && current_user_can('manage_options');
+$bctk_po_nonce = $bctk_can_po ? wp_create_nonce('tgs_poa_nonce') : '';
+$bctk_po_list  = class_exists('TGS_POA_Menu')
+    ? admin_url('admin.php?page=tgs-shop-management&view=' . TGS_POA_Menu::VIEW_LIST)
+    : '';
+
+/* "Nguồn phát sinh phiếu là website đang quét" — chính là site đang mở báo cáo */
+$bctk_cur_bid  = (int) get_current_blog_id();
+$bctk_cur_name = get_bloginfo('name');
 ?>
 
 <div class="bctk-page" id="bctkPage">
@@ -39,6 +59,11 @@ $bctk_first = current_time('Y-m-01');
                 </span>
                 <span class="bctk-selinfo bctk-hidden" id="bctkSelInfo"></span>
             </div>
+            <?php if ($bctk_can_po) : ?>
+                <button type="button" class="bctk-btn-po bctk-hidden" id="bctkBtnPo">
+                    <i class="bx bx-cart-add"></i> Tạo PO đề nghị mua hàng
+                </button>
+            <?php endif; ?>
             <span class="bctk-count" id="bctkRowCount">chưa tìm kiếm</span>
         </div>
 
@@ -100,6 +125,72 @@ $bctk_first = current_time('Y-m-01');
     </section>
 </div>
 
+<?php if ($bctk_can_po) : ?>
+    <?php
+    /*
+     * Modal soát lại trước khi ghi phiếu — dựng theo đúng mạch của
+     * "Xem lại & chỉnh số lượng trước khi tạo PO" bên Quét tồn thông minh, để
+     * người dùng quen tay một lần là dùng được cả hai màn.
+     */
+    ?>
+    <div class="modal fade" id="bctkPoModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bx bx-cart-add me-1"></i> Soát lại đề nghị mua hàng trước khi tạo PO
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+
+                <div class="modal-body">
+                    <div class="alert alert-info small mb-3">
+                        Loại đề xuất <b>Kho mua thêm</b> · nguồn phát sinh phiếu là
+                        <b><?php echo esc_html($bctk_cur_name); ?></b> · nguồn chuyển hàng và nguồn nhận hàng để trống.
+                        <br>Chỉnh lại <b>SL đề nghị</b> nếu cần (mặc định = gợi ý nhập).
+                        Bỏ tick hoặc đặt SL = 0 để loại dòng đó khỏi phiếu.
+                    </div>
+
+                    <div class="bctk-modal-tablewrap">
+                        <table class="bctk-table bctk-modal-table" id="bctkPoTable">
+                            <thead>
+                                <tr>
+                                    <th class="c-pick">
+                                        <input class="form-check-input" type="checkbox" id="bctkPoAll" checked>
+                                    </th>
+                                    <th class="c-sku">Mã hàng</th>
+                                    <th class="c-name">Tên hàng</th>
+                                    <th class="c-sup">NCC gợi ý</th>
+                                    <th class="c-num">Tồn cuối</th>
+                                    <th class="c-num">Đi đường</th>
+                                    <th class="c-num">Tồn min</th>
+                                    <th class="c-num">Tồn max</th>
+                                    <th class="c-num c-qty">SL đề nghị</th>
+                                    <th class="c-note">Ghi chú dòng</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bctkPoBody"></tbody>
+                        </table>
+                    </div>
+
+                    <div class="mt-3">
+                        <label class="form-label fw-semibold" for="bctkPoNote">Ghi chú chung (ghi vào phiếu)</label>
+                        <textarea id="bctkPoNote" class="form-control" rows="3"></textarea>
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <div class="me-auto small text-muted" id="bctkPoSummary">—</div>
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Đóng</button>
+                    <button type="button" class="btn btn-primary" id="bctkPoConfirm">
+                        <i class="bx bx-check-double me-1"></i> Xác nhận tạo PO
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+<?php endif; ?>
+
 <script>
     window.TGS_BCTK = {
         ajaxUrl: '<?php echo esc_js(admin_url('admin-ajax.php')); ?>',
@@ -108,6 +199,14 @@ $bctk_first = current_time('Y-m-01');
         zones: <?php echo wp_json_encode($bctk_boot['zones']); ?>,
         sites: <?php echo wp_json_encode($bctk_boot['sites']); ?>,
         children: <?php echo wp_json_encode($bctk_boot['children']); ?>
+    };
+
+    window.TGS_BCTK_PO = {
+        enabled: <?php echo $bctk_can_po ? 'true' : 'false'; ?>,
+        nonce: <?php echo wp_json_encode($bctk_po_nonce); ?>,
+        listUrl: <?php echo wp_json_encode($bctk_po_list); ?>,
+        blogId: <?php echo (int) $bctk_cur_bid; ?>,
+        blogName: <?php echo wp_json_encode($bctk_cur_name); ?>
     };
 
     jQuery(function ($) {
@@ -244,6 +343,7 @@ $bctk_first = current_time('Y-m-01');
 
         function updateSelInfo() {
             var picked = $('.bctk-pick:checked');
+            toggleSelUi(picked.length);
             if (!picked.length) {
                 $('#bctkSelInfo').addClass('bctk-hidden');
                 return;
@@ -258,6 +358,12 @@ $bctk_first = current_time('Y-m-01');
                 .text('Đã chọn ' + picked.length + ' mã · gợi ý nhập ' + B.fmt(qty));
         }
 
+        /* Nút tạo PO chỉ hiện khi thực sự có dòng được chọn — không có gì để
+           soát thì nút chỉ tổ gây bấm nhầm */
+        function toggleSelUi(n) {
+            $('#bctkBtnPo').toggleClass('bctk-hidden', n === 0);
+        }
+
         /* Chỉ tích những dòng ĐANG HIỆN — đang lọc mà tích cả dòng ẩn thì người
            dùng không thấy mình vừa chọn thêm gì */
         $('#bctkPickAll').on('change', function () {
@@ -268,13 +374,178 @@ $bctk_first = current_time('Y-m-01');
 
         $(document).on('change', '.bctk-pick', updateSelInfo);
 
-        /* API để lượt sau gắn hành động (tạo PO, xuất Excel riêng…) */
-        window.TGSBctkPurchase = {
-            getSelected: function () {
-                return $('.bctk-pick:checked').map(function () {
-                    return merged[parseInt($(this).closest('tr').attr('data-i'), 10)];
-                }).get();
+        function selectedRows() {
+            return $('.bctk-pick:checked').map(function () {
+                return merged[parseInt($(this).closest('tr').attr('data-i'), 10)];
+            }).get();
+        }
+
+        /* API để lượt sau gắn thêm hành động khác (xuất Excel riêng…) */
+        window.TGSBctkPurchase = { getSelected: selectedRows };
+
+        // ── Tạo PO đề nghị mua hàng ─────────────────────────────────────────
+
+        var PO = window.TGS_BCTK_PO || {};
+        if (!PO.enabled) { return; }
+
+        var poRows = [];
+
+        function poModal() {
+            return bootstrap.Modal.getOrCreateInstance(document.getElementById('bctkPoModal'));
+        }
+
+        /*
+         * Ghi chú chung tự sinh: ghi lại BỐI CẢNH quét (kỳ nào, bao nhiêu mã),
+         * thứ mà đọc phiếu sau này không còn suy ra được. Khác hẳn ghi chú từng
+         * dòng ở bảng ngoài — cái đó chỉ giải thích con số gợi ý, xem tại chỗ là
+         * đủ, nên KHÔNG mang vào phiếu (đúng yêu cầu: mở modal thì xóa đi cho
+         * đỡ rối). Người dùng vẫn sửa lại được trước khi tạo.
+         */
+        function buildCommonNote(rows) {
+            var from = $('#bctkDateFrom').val() || '';
+            var to   = $('#bctkDateTo').val() || '';
+            var qty  = 0;
+            rows.forEach(function (r) { qty += (r.need || 0); });
+
+            return 'Đề nghị mua hàng lập từ Phân tích mua hàng (BC_TK)'
+                 + ' · kỳ ' + from + ' → ' + to
+                 + ' · ' + rows.length + ' mã · tổng SL đề nghị ' + B.fmt(qty)
+                 + '.';
+        }
+
+        function renderPoRows() {
+            var html = poRows.map(function (r, i) {
+                return '<tr data-p="' + i + '">'
+                    + '<td class="c-pick"><input class="form-check-input bctk-po-pick" type="checkbox" checked></td>'
+                    + '<td class="c-sku">' + B.esc(r.sku) + '</td>'
+                    + '<td class="c-name">' + B.esc(r.name) + '</td>'
+                    + '<td class="c-sup">' + B.esc(r.sup_code || r.sup_name || '') + '</td>'
+                    + '<td class="c-num">' + B.fmt(r.ton_cuoi) + '</td>'
+                    + '<td class="c-num col-transit">' + (r.in_transit ? B.fmt(r.in_transit) : '') + '</td>'
+                    + '<td class="c-num col-mm">' + (r.min ? B.fmt(r.min) : '') + '</td>'
+                    + '<td class="c-num col-mm">' + (r.max ? B.fmt(r.max) : '') + '</td>'
+                    + '<td class="c-num c-qty"><input type="number" class="form-control form-control-sm bctk-po-qty"'
+                        + ' min="0" step="1" value="' + (r.need || 0) + '"></td>'
+                    // Ghi chú dòng để TRỐNG có chủ đích — người dùng tự ghi nếu cần
+                    + '<td class="c-note"><input type="text" class="form-control form-control-sm bctk-po-note"'
+                        + ' placeholder="—"></td>'
+                    + '</tr>';
+            }).join('');
+
+            $('#bctkPoBody').html(html);
+            $('#bctkPoAll').prop('checked', true);
+            updatePoSummary();
+        }
+
+        function collectPoItems() {
+            var out = [];
+            $('#bctkPoBody tr').each(function () {
+                var $tr = $(this);
+                if (!$tr.find('.bctk-po-pick').prop('checked')) { return; }
+
+                var r   = poRows[parseInt($tr.attr('data-p'), 10)];
+                var qty = parseFloat($tr.find('.bctk-po-qty').val());
+                if (!r || !(qty > 0)) { return; }
+
+                out.push({
+                    /*
+                     * Theo yêu cầu: loại đề xuất là "kho mua thêm", nguồn phát
+                     * sinh là website đang quét, nguồn chuyển / nguồn nhận để
+                     * trống. Endpoint gom nhóm theo intent|transfer|receive nên
+                     * cả rổ này rơi vào đúng MỘT phiếu.
+                     */
+                    intent: 'warehouse_purchase_more',
+                    request_blog_id: PO.blogId,
+                    request_blog_name: PO.blogName,
+                    transfer_blog_id: 0,
+                    transfer_blog_name: '',
+                    receive_blog_id: 0,
+                    receive_blog_name: '',
+
+                    sku: r.sku,
+                    name: r.name,
+                    quantity: qty,
+                    current_stock: r.ton_cuoi || 0,
+                    min_qty: r.min || 0,
+                    max_qty: r.max || 0,
+                    reason: $tr.find('.bctk-po-note').val() || ''
+                });
+            });
+            return out;
+        }
+
+        function updatePoSummary() {
+            var n = 0, qty = 0;
+            $('#bctkPoBody tr').each(function () {
+                var $tr = $(this);
+                if (!$tr.find('.bctk-po-pick').prop('checked')) { return; }
+                var v = parseFloat($tr.find('.bctk-po-qty').val());
+                if (!(v > 0)) { return; }
+                n++;
+                qty += v;
+            });
+            $('#bctkPoSummary').text(n
+                ? ('Sẽ tạo 1 phiếu · ' + n + ' mã · tổng SL ' + B.fmt(qty))
+                : 'Chưa có dòng nào hợp lệ');
+            $('#bctkPoConfirm').prop('disabled', n === 0);
+        }
+
+        $('#bctkBtnPo').on('click', function () {
+            poRows = selectedRows();
+            if (!poRows.length) { return; }
+
+            renderPoRows();
+            $('#bctkPoNote').val(buildCommonNote(poRows));
+            poModal().show();
+        });
+
+        $(document).on('change', '.bctk-po-pick', updatePoSummary);
+        $(document).on('input change', '.bctk-po-qty', updatePoSummary);
+
+        $('#bctkPoAll').on('change', function () {
+            $('#bctkPoBody .bctk-po-pick').prop('checked', this.checked);
+            updatePoSummary();
+        });
+
+        $('#bctkPoConfirm').on('click', function () {
+            var items = collectPoItems();
+            if (!items.length) {
+                alert('Không còn dòng nào hợp lệ (đã bỏ tick hoặc SL = 0).');
+                return;
             }
-        };
+
+            var $btn = $(this), old = $btn.html();
+            $btn.prop('disabled', true)
+                .html('<span class="spinner-border spinner-border-sm me-1"></span> Đang tạo...');
+
+            $.post(window.TGS_BCTK.ajaxUrl, {
+                action: 'tgs_poa_create',
+                nonce: PO.nonce,
+                items: JSON.stringify(items),
+                note: $('#bctkPoNote').val() || ''
+            }).done(function (resp) {
+                if (!resp || !resp.success) {
+                    alert((resp && resp.data && resp.data.message) || 'Tạo PO thất bại.');
+                    return;
+                }
+                var d = resp.data || {};
+                poModal().hide();
+
+                var code = (d.created && d.created[0]) ? d.created[0].code : '';
+                var msg  = 'Đã tạo phiếu ' + (code || 'PO') + '.';
+
+                if (PO.listUrl && confirm(msg + '\n\nMở danh sách PO ngay?')) {
+                    window.open(PO.listUrl, '_blank');
+                }
+                // Bỏ tick sau khi tạo xong để không lỡ tay tạo trùng phiếu
+                $('.bctk-pick').prop('checked', false);
+                $('#bctkPickAll').prop('checked', false);
+                updateSelInfo();
+            }).fail(function () {
+                alert('Không gọi được máy chủ. Thử lại giúp mình.');
+            }).always(function () {
+                $btn.prop('disabled', false).html(old);
+            });
+        });
     });
 </script>

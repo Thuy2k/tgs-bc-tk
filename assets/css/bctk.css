@@ -449,3 +449,45 @@
     font-size: 12px;
     font-weight: 600;
 }
+
+/* ── Tạo PO đề nghị mua hàng ─────────────────────────────────────────────── */
+
+.bctk-btn-po {
+    margin-left: auto;
+    margin-right: 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 12px;
+    border: 0;
+    border-radius: 4px;
+    background: #15803d;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.bctk-btn-po:hover { background: #126b33; }
+
+/*
+ * Bảng soát trong modal cuộn riêng, không đẩy dài cả modal — chọn 200 mã vẫn
+ * thấy được nút Xác nhận mà không phải cuộn hết bảng.
+ */
+.bctk-modal-tablewrap {
+    max-height: 46vh;
+    overflow: auto;
+    border: 1px solid #dbe2ea;
+    border-radius: 4px;
+}
+
+.bctk-modal-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.bctk-modal-table td.c-qty { width: 110px; }
+.bctk-modal-table td.c-qty input { width: 92px; text-align: right; }
+.bctk-modal-table td.c-note { max-width: none; width: 220px; }
+.bctk-modal-table td.c-note input { width: 100%; }
