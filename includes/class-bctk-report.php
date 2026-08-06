@@ -446,6 +446,73 @@ class TGS_BCTK_Report
     }
 
     /**
+     * Gợi ý NCC cho từng mã hàng — lấy từ PHIẾU NHẬP GẦN NHẤT có NCC.
+     *
+     * Chỉ mang tính THAM KHẢO để người mua hàng đỡ phải tra lại: "lần gần nhất
+     * mã này nhập từ ai". Có thể trống nếu mã chưa từng nhập kèm NCC.
+     *
+     * Cố ý chỉ lấy MỘT NCC duy nhất (cái gần nhất) thay vì liệt kê tất cả —
+     * danh sách dài không giúp quyết định nhanh hơn.
+     *
+     * @return array [sku => ['code' => ..., 'name' => ...]]
+     */
+    public static function supplier_hint($blog_id, array $skus)
+    {
+        global $wpdb;
+
+        $blog_id = (int) $blog_id;
+        $skus    = array_values(array_unique(array_filter($skus)));
+        if ($blog_id <= 0 || empty($skus)) {
+            return [];
+        }
+
+        $prefix = $wpdb->get_blog_prefix($blog_id);
+        $item   = $prefix . 'local_ledger_item';
+        $ledger = $prefix . 'local_ledger';
+        $sup    = $wpdb->base_prefix . 'global_supplier';
+
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $item)) !== $item) {
+            return [];
+        }
+
+        $ph = implode(',', array_fill(0, count($skus), '%s'));
+
+        /*
+         * Sắp giảm dần theo ngày rồi lấy dòng ĐẦU TIÊN của mỗi mã ở PHP.
+         * Làm kiểu "lấy bản ghi mới nhất trong nhóm" bằng SQL thuần cần window
+         * function hoặc self-join — nặng hơn mà không cần thiết, vì tập SKU ở
+         * đây chỉ vài nghìn dòng.
+         */
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT li.local_product_sku AS sku,
+                    s.supplier_code AS code,
+                    s.supplier_name AS name
+               FROM {$item} li
+               JOIN {$ledger} l ON l.local_ledger_id = li.local_ledger_id
+               JOIN {$sup} s    ON s.supplier_id = l.supplier_id
+              WHERE li.local_product_sku IN ({$ph})
+                AND li.local_ledger_item_type = %d
+                AND l.local_ledger_approver_status = %d
+                AND l.supplier_id > 0
+                AND (li.is_deleted = 0 OR li.is_deleted IS NULL)
+                AND (l.is_deleted = 0 OR l.is_deleted IS NULL)
+              ORDER BY li.created_at DESC",
+            ...array_merge($skus, [self::ITEM_TYPE_IMPORT, self::APPROVER_STATUS_APPROVED])
+        ), ARRAY_A) ?: [];
+
+        $map = [];
+        foreach ($rows as $r) {
+            $sku = (string) $r['sku'];
+            if (isset($map[$sku])) {
+                continue; // đã có cái gần nhất rồi
+            }
+            $map[$sku] = ['code' => (string) $r['code'], 'name' => (string) $r['name']];
+        }
+
+        return $map;
+    }
+
+    /**
      * Hàng đang đi đường của một site, gộp theo mã hàng.
      *
      * Quy tắc: phiếu nhập (type 1) CHƯA duyệt, phiếu cha là phiếu mua nội bộ

@@ -37,8 +37,9 @@ require_once TGS_BCTK_DIR . 'includes/class-bctk-ajax.php';
 class TGS_BCTK_Plugin
 {
     /** View slug — dùng lại ở cả nav, route lẫn điều kiện nạp asset */
-    const VIEW_STOCK  = 'bctk-stock';
-    const VIEW_LEDGER = 'bctk-ledger';
+    const VIEW_STOCK    = 'bctk-stock';
+    const VIEW_LEDGER   = 'bctk-ledger';
+    const VIEW_PURCHASE = 'bctk-purchase';
 
     /** Mọi view của BC_TK — thêm màn mới chỉ cần khai ở đây */
     private static function views()
@@ -46,6 +47,7 @@ class TGS_BCTK_Plugin
         return [
             self::VIEW_STOCK  => ['Báo cáo tồn kho', 'Tồn kho', 'bx bx-box', 'stock-report.php'],
             self::VIEW_LEDGER => ['Sổ kho theo mặt hàng', 'Sổ kho (theo mặt hàng)', 'bx bx-book-content', 'stock-ledger.php'],
+            self::VIEW_PURCHASE => ['Phân tích mua hàng', 'Phân tích mua hàng', 'bx bx-cart-add', 'stock-purchase.php'],
         ];
     }
 

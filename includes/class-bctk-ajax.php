@@ -26,6 +26,72 @@ class TGS_BCTK_Ajax
     {
         add_action('wp_ajax_tgs_bctk_fetch_site', [__CLASS__, 'fetch_site']);
         add_action('wp_ajax_tgs_bctk_fetch_ledger', [__CLASS__, 'fetch_ledger']);
+        add_action('wp_ajax_tgs_bctk_fetch_purchase', [__CLASS__, 'fetch_purchase']);
+    }
+
+    /**
+     * Phân tích mua hàng — sổ kho + tồn max/min + hàng đi đường + gợi ý NCC.
+     *
+     * Dùng chung khung xử lý với fetch_ledger, chỉ bồi thêm dữ liệu. Phần gợi ý
+     * mua bao nhiêu KHÔNG tính ở đây mà tính sau khi gộp các chi nhánh ở phía
+     * giao diện — xem chú thích trong stock-purchase.php.
+     */
+    public static function fetch_purchase()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền xem báo cáo']);
+        }
+
+        $blog_id = isset($_POST['blog_id']) ? (int) $_POST['blog_id'] : 0;
+        $zones   = isset($_POST['zones']) && is_array($_POST['zones'])
+            ? array_map('sanitize_text_field', wp_unslash($_POST['zones']))
+            : [];
+
+        $today = current_time('Y-m-d');
+        $from  = self::sanitize_date($_POST['date_from'] ?? '', $today);
+        $to    = self::sanitize_date($_POST['date_to'] ?? '', $today);
+
+        if ($blog_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu blog_id']);
+        }
+        if ($from > $to) {
+            list($from, $to) = [$to, $from];
+        }
+
+        try {
+            $base = self::build_ledger_rows($blog_id, $zones, $from, $to);
+            if (empty($base['rows'])) {
+                wp_send_json_success($base);
+            }
+
+            $skus = array_column($base['rows'], 'sku');
+
+            /*
+             * Tồn max/min lấy THEO WEBSITE, không theo phân kho — cấu hình
+             * min/max vốn khai ở mức site. Gộp nhiều site thì cộng dồn lại,
+             * việc cộng do phía giao diện làm sau khi gộp mã hàng.
+             */
+            $mm        = TGS_BCTK_Report::min_max($skus, [$blog_id])[$blog_id] ?? [];
+            $transit   = TGS_BCTK_Report::site_in_transit_rows($blog_id);
+            $suppliers = TGS_BCTK_Report::supplier_hint($blog_id, $skus);
+
+            foreach ($base['rows'] as &$r) {
+                $sku = $r['sku'];
+                $r['max']        = isset($mm[$sku]['max']) ? (float) $mm[$sku]['max'] : 0;
+                $r['min']        = isset($mm[$sku]['min']) ? (float) $mm[$sku]['min'] : 0;
+                $r['has_minmax'] = isset($mm[$sku]);
+                $r['in_transit'] = (float) ($transit[$sku] ?? 0);
+                $r['sup_code']   = (string) ($suppliers[$sku]['code'] ?? '');
+                $r['sup_name']   = (string) ($suppliers[$sku]['name'] ?? '');
+            }
+            unset($r);
+
+            wp_send_json_success($base);
+        } catch (Exception $e) {
+            wp_send_json_error(['message' => $e->getMessage(), 'blog_id' => $blog_id]);
+        }
     }
 
     /** Sổ kho theo mặt hàng — mỗi lượt một site, giống fetch_site */
