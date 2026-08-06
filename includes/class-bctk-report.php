@@ -1,0 +1,288 @@
+<?php
+
+/**
+ * Engine gộp dữ liệu tồn kho theo mã hàng — chạy từng site một.
+ *
+ * @package tgs-bc-tk
+ */
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+class TGS_BCTK_Report
+{
+    /*
+     * ─── CÁC HẰNG SỐ PHẢI KHỚP TGS_Global_Product_Source ────────────────────
+     *
+     * Công thức tính tồn ở dưới CHÉP NGUYÊN từ
+     * TGS_Global_Product_Source::get_stock_for_skus(). Bắt buộc phải khớp từng
+     * chi tiết, vì đây là con số kế toán đối chiếu — lệch một điều kiện là báo
+     * cáo ra số khác với màn tìm sản phẩm và POS, không ai biết bên nào đúng.
+     *
+     * Không gọi thẳng hàm đó được vì nó gộp theo SKU, còn báo cáo này cần gộp
+     * theo SKU **và phân kho**. Nhưng biểu thức CASE thì giữ y nguyên.
+     *
+     * Sửa công thức ở nguồn thì phải sửa cả đây.
+     */
+    const ITEM_TYPE_IMPORT         = 1;
+    const ITEM_TYPE_EXPORT         = 2;
+    const ITEM_TYPE_PURCHASE_ORDER = 9;
+    const APPROVER_STATUS_APPROVED = 1;
+
+    /**
+     * Lấy số liệu tồn của MỘT site, gộp theo (mã hàng, phân kho).
+     *
+     * Trả về mảng dòng:
+     *   [ 'sku', 'zone', 'qty' ]
+     *
+     * Không dùng switch_to_blog: get_blog_prefix() cho phép trỏ thẳng vào bảng
+     * của site khác, rẻ hơn nhiều so với switch (switch phải nạp lại option,
+     * cache, user caps của site đó).
+     *
+     * @param int $blog_id
+     * @param array $zones Lọc theo phân kho; rỗng = lấy tất cả
+     */
+    public static function site_stock_rows($blog_id, array $zones = [])
+    {
+        global $wpdb;
+
+        $blog_id = (int) $blog_id;
+        if ($blog_id <= 0) {
+            return [];
+        }
+
+        /*
+         * Điểm nối mở rộng: site nào lấy số liệu qua API riêng thì cắm hook này,
+         * trả về mảng cùng định dạng là xong, lõi không phải biết gì thêm.
+         * Trả null = dùng truy vấn mặc định bên dưới.
+         */
+        $custom = apply_filters('tgs_bctk_site_stock_rows', null, $blog_id, $zones);
+        if (is_array($custom)) {
+            return $custom;
+        }
+
+        $prefix       = $wpdb->get_blog_prefix($blog_id);
+        $item_table   = $prefix . 'local_ledger_item';
+        $ledger_table = $prefix . 'local_ledger';
+
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $item_table)) !== $item_table) {
+            return [];
+        }
+
+        $params = [
+            self::APPROVER_STATUS_APPROVED,
+            self::ITEM_TYPE_IMPORT,
+            self::ITEM_TYPE_EXPORT,
+        ];
+
+        /*
+         * Chỉ lấy dòng CÓ local_product_sku. Dòng thiếu SKU không đối chiếu
+         * được với sản phẩm global nên không đưa vào báo cáo.
+         */
+        $where = [
+            "li.local_product_sku IS NOT NULL",
+            "li.local_product_sku <> ''",
+            "(li.is_deleted = 0 OR li.is_deleted IS NULL)",
+            "(l.is_deleted = 0 OR l.is_deleted IS NULL)",
+            "(li.local_ledger_item_type IS NULL OR li.local_ledger_item_type <> %d)",
+        ];
+        $params[] = self::ITEM_TYPE_PURCHASE_ORDER;
+
+        if (!empty($zones)) {
+            /*
+             * Mã giả ZONE_NONE không phải giá trị có thật trong cột, nó đại diện
+             * cho các dòng CHƯA GÁN phân kho. Phải tách ra thành điều kiện
+             * "rỗng hoặc NULL" riêng, rồi OR với danh sách mã thật.
+             *
+             * NULL và chuỗi rỗng đều tính là chưa phân kho: dữ liệu cũ có cả hai
+             * kiểu, thiếu vế IS NULL là sót hàng.
+             */
+            $want_none = in_array(TGS_BCTK_Sites::ZONE_NONE, $zones, true);
+            $real      = array_values(array_filter($zones, static function ($z) {
+                return $z !== TGS_BCTK_Sites::ZONE_NONE;
+            }));
+
+            $parts = [];
+
+            if (!empty($real)) {
+                $ph = implode(',', array_fill(0, count($real), '%s'));
+                $parts[] = "li.local_ledger_item_warehouse_zone IN ({$ph})";
+                foreach ($real as $z) {
+                    $params[] = (string) $z;
+                }
+            }
+
+            if ($want_none) {
+                $parts[] = "(li.local_ledger_item_warehouse_zone IS NULL"
+                         . " OR li.local_ledger_item_warehouse_zone = '')";
+            }
+
+            if (!empty($parts)) {
+                $where[] = '(' . implode(' OR ', $parts) . ')';
+            }
+        }
+
+        $where_sql = implode(' AND ', $where);
+
+        $sql = "
+            SELECT
+                li.local_product_sku AS sku,
+                COALESCE(NULLIF(li.local_ledger_item_warehouse_zone, ''), '') AS zone,
+                COALESCE(SUM(CASE
+                    WHEN l.local_ledger_approver_status = %d THEN
+                        CASE
+                            WHEN li.local_ledger_item_type = %d THEN  ABS(li.quantity)
+                            WHEN li.local_ledger_item_type = %d THEN -ABS(li.quantity)
+                            ELSE COALESCE(li.quantity, 0)
+                        END
+                    ELSE 0
+                END), 0) AS qty
+            FROM {$item_table} li
+            LEFT JOIN {$ledger_table} l ON l.local_ledger_id = li.local_ledger_id
+            WHERE {$where_sql}
+            GROUP BY li.local_product_sku, zone
+        ";
+
+        $rows = $wpdb->get_results($wpdb->prepare($sql, ...$params), ARRAY_A) ?: [];
+
+        return array_map(static function ($r) {
+            return [
+                'sku'  => (string) $r['sku'],
+                'zone' => (string) $r['zone'],
+                'qty'  => (float) $r['qty'],
+            ];
+        }, $rows);
+    }
+
+    /**
+     * Hàng đang đi đường của một site, gộp theo mã hàng.
+     *
+     * Quy tắc: phiếu nhập (type 1) CHƯA duyệt, phiếu cha là phiếu mua nội bộ
+     * (type 13) cũng CHƯA duyệt. Xem docs/hang-dang-di-duong.md ở plugin
+     * tgs-transfer-management.
+     *
+     * Chưa duyệt = NULL hoặc 0. KHÔNG viết "!= 1" vì trạng thái 2 là TỪ CHỐI —
+     * phiếu bị từ chối thì hàng không còn đi đường.
+     */
+    public static function site_in_transit_rows($blog_id)
+    {
+        global $wpdb;
+
+        $blog_id = (int) $blog_id;
+        $prefix  = $wpdb->get_blog_prefix($blog_id);
+        $item    = $prefix . 'local_ledger_item';
+        $ledger  = $prefix . 'local_ledger';
+
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $item)) !== $item) {
+            return [];
+        }
+
+        $sql = "
+            SELECT li.local_product_sku AS sku,
+                   COALESCE(SUM(ABS(li.quantity)), 0) AS qty
+            FROM {$ledger} AS imp
+            INNER JOIN {$ledger} AS parent
+                    ON parent.local_ledger_id = imp.local_ledger_parent_id
+            INNER JOIN {$item} AS li
+                    ON li.local_ledger_id = imp.local_ledger_id
+            WHERE imp.local_ledger_type = 1
+              AND (imp.local_ledger_approver_status IS NULL OR imp.local_ledger_approver_status = 0)
+              AND parent.local_ledger_type = 13
+              AND (parent.local_ledger_approver_status IS NULL OR parent.local_ledger_approver_status = 0)
+              AND (imp.is_deleted = 0 OR imp.is_deleted IS NULL)
+              AND (parent.is_deleted = 0 OR parent.is_deleted IS NULL)
+              AND (li.is_deleted = 0 OR li.is_deleted IS NULL)
+              AND li.local_product_sku IS NOT NULL AND li.local_product_sku <> ''
+            GROUP BY li.local_product_sku
+        ";
+
+        $rows = $wpdb->get_results($sql, ARRAY_A) ?: [];
+
+        $map = [];
+        foreach ($rows as $r) {
+            $map[(string) $r['sku']] = (float) $r['qty'];
+        }
+
+        return $map;
+    }
+
+    /**
+     * Thông tin sản phẩm cho một loạt SKU — MỘT truy vấn cho toàn bộ báo cáo.
+     *
+     * wp_global_product_name là bảng global nên không phụ thuộc site: 70 site
+     * vẫn chỉ tốn một lượt hỏi, thay vì hỏi lại ở từng site.
+     */
+    public static function product_info(array $skus)
+    {
+        global $wpdb;
+
+        $skus = array_values(array_unique(array_filter($skus)));
+        if (empty($skus)) {
+            return [];
+        }
+
+        $table = $wpdb->base_prefix . 'global_product_name';
+        $ph    = implode(',', array_fill(0, count($skus), '%s'));
+
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT global_product_sku AS sku,
+                    global_product_name AS name,
+                    global_product_barcode_main AS alias,
+                    global_product_unit AS unit,
+                    global_product_price_after_tax AS price
+               FROM {$table}
+              WHERE global_product_sku IN ({$ph})",
+            ...$skus
+        ), ARRAY_A) ?: [];
+
+        $map = [];
+        foreach ($rows as $r) {
+            $map[(string) $r['sku']] = $r;
+        }
+
+        return $map;
+    }
+
+    /**
+     * Tồn max / tồn min theo (mã hàng, site).
+     *
+     * wp_global_sku_stock_config cũng là bảng GLOBAL và đã có sẵn cột blog_id,
+     * nên lấy min/max cho cả 70 site chỉ tốn một truy vấn — không phải hỏi vòng
+     * qua từng site.
+     */
+    public static function min_max(array $skus, array $blog_ids)
+    {
+        global $wpdb;
+
+        $skus     = array_values(array_unique(array_filter($skus)));
+        $blog_ids = array_values(array_unique(array_map('intval', $blog_ids)));
+        if (empty($skus) || empty($blog_ids)) {
+            return [];
+        }
+
+        $table   = $wpdb->base_prefix . 'global_sku_stock_config';
+        $sku_ph  = implode(',', array_fill(0, count($skus), '%s'));
+        $blog_ph = implode(',', array_fill(0, count($blog_ids), '%d'));
+
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT product_sku, blog_id, min_qty, max_qty
+               FROM {$table}
+              WHERE product_sku IN ({$sku_ph})
+                AND blog_id IN ({$blog_ph})
+                AND (is_deleted = 0 OR is_deleted IS NULL)
+                AND is_active = 1",
+            ...array_merge($skus, $blog_ids)
+        ), ARRAY_A) ?: [];
+
+        $map = [];
+        foreach ($rows as $r) {
+            $map[(int) $r['blog_id']][(string) $r['product_sku']] = [
+                'min' => (float) $r['min_qty'],
+                'max' => (float) $r['max_qty'],
+            ];
+        }
+
+        return $map;
+    }
+}

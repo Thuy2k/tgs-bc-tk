@@ -1,0 +1,382 @@
+/*
+ * BC_TK — Báo cáo tồn kho
+ *
+ * Bố cục bám phần mềm cũ: bộ lọc trái hẹp và dày đặc, bảng số liệu chiếm phần
+ * còn lại, chữ nhỏ để một màn chứa được nhiều dòng. Nhưng dùng bảng màu và bo
+ * góc của giao diện mới để không lạc lõng với phần còn lại của hệ thống.
+ */
+
+/*
+ * Hai cột cao bằng nhau, lấp kín phần màn hình còn lại.
+ *
+ * Chiều cao thật do JS đo và gán inline (xem fitHeight() trong bctk-filter.js).
+ * KHÔNG dùng calc(100vh - <số cố định>): trang này chạy trong iframe của hệ
+ * thống tab, nên 100vh bên trong iframe ĐÃ LÀ chiều cao khung — trừ thêm một số
+ * cố định cho nav/admin bar là trừ nhầm phần không tồn tại, và đó chính là mảng
+ * trắng thừa dưới bảng. Con số trừ còn khác nhau giữa chạy trong tab và mở
+ * trực tiếp, nên đo lúc chạy mới đúng cả hai.
+ *
+ * Giá trị dưới đây chỉ là phòng hờ khi JS chưa kịp chạy.
+ */
+.bctk-page {
+    display: flex;
+    gap: 12px;
+    align-items: stretch;
+    height: 78vh;
+    min-height: 420px;
+    font-size: 13px;
+}
+
+/* ── Bộ lọc trái ───────────────────────────────────────────────────────── */
+
+.bctk-filter {
+    flex: 0 0 232px;
+    width: 232px;
+    background: #fff;
+    border: 1px solid #dbe2ea;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/*
+ * Thân khối lọc KHÔNG tự cuộn.
+ *
+ * Để nó cuộn thì màn hình có hai thanh cuộn lồng nhau — một của thân, một của
+ * danh sách mã kho bên trong. Nhìn rối và dễ lăn nhầm cái ngoài.
+ *
+ * Thay vào đó: thân là một cột dọc, nhóm CHI NHÁNH cao tự nhiên, nhóm MÃ KHO
+ * nở ra chiếm hết phần còn lại và chỉ danh sách bên trong nó cuộn. Kết quả là
+ * mỗi khung chỉ có đúng một thanh cuộn, đúng chỗ người dùng cần lăn.
+ */
+.bctk-filter__body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding: 8px 10px 10px;
+}
+
+/*
+ * Hai nhóm chia đôi chiều cao: mỗi nhóm một nửa.
+ *
+ * flex-basis: 0 để phần chia dựa trên chỗ trống chứ không dựa vào nội dung —
+ * nếu để auto thì nhóm nào nhiều mục hơn sẽ chiếm nhiều hơn, và tỉ lệ nhảy
+ * lung tung mỗi lần tích thêm chi nhánh.
+ */
+.bctk-group--sites,
+.bctk-group--zones {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.bctk-group--zones { margin-bottom: 0; }
+
+/* Nháy viền khi người dùng bấm Tìm kiếm mà chưa chọn mã kho — chỉ đúng chỗ
+   cần thao tác, đỡ phải đọc lại hộp thoại */
+.bctk-flash .bctk-list {
+    border-color: #dc2626;
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, .18);
+}
+
+/* Danh sách bên trong mỗi nhóm nuốt phần cao còn lại của nhóm đó */
+.bctk-group--sites .bctk-list,
+.bctk-group--zones .bctk-list {
+    flex: 1 1 auto;
+    min-height: 80px;
+    max-height: none;
+}
+
+/* Chân khối lọc: luôn nhìn thấy, không cuộn theo danh sách bên trên */
+.bctk-filter__foot {
+    flex: 0 0 auto;
+    padding: 8px 10px 10px;
+    border-top: 1px solid #dbe2ea;
+    background: #f8fafc;
+}
+
+/* ── Trạng thái thu gọn ────────────────────────────────────────────────── */
+
+.bctk-page.is-collapsed .bctk-filter { flex-basis: 34px; width: 34px; }
+.bctk-page.is-collapsed .bctk-filter__body,
+.bctk-page.is-collapsed .bctk-filter__foot { display: none; }
+
+/*
+ * Thu gọn thì GIẤU chữ tiêu đề, chỉ chừa nút bung ra.
+ *
+ * Panel còn 34px mà vẫn giữ chữ "Tiêu chí tìm kiếm" thì chữ xuống dòng chiếm
+ * hết chỗ, đẩy nút ra ngoài vùng nhìn thấy — thu gọn xong không mở lại được,
+ * kẹt luôn bộ lọc.
+ */
+.bctk-page.is-collapsed .bctk-filter__head {
+    justify-content: center;
+    padding: 8px 2px;
+}
+
+.bctk-page.is-collapsed .bctk-filter__head > span { display: none; }
+
+/* Vùng bấm rộng ra cho dễ trúng, và có nền để nhìn ra là nút */
+.bctk-collapse {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+}
+
+.bctk-collapse:hover { background: #dbe6f5; color: #1d4ed8; }
+
+.bctk-filter__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    background: #eef2f8;
+    border-bottom: 1px solid #dbe2ea;
+    font-weight: 600;
+    font-size: 12px;
+}
+
+.bctk-collapse {
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    color: #64748b;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+}
+
+
+.bctk-group { margin-bottom: 12px; }
+
+.bctk-group__title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 600;
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: .3px;
+    color: #475569;
+    margin-bottom: 5px;
+}
+
+.bctk-all { font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 12px; cursor: pointer; }
+.bctk-all input { margin-right: 3px; }
+
+.bctk-search {
+    width: 100%;
+    height: 26px;
+    padding: 0 7px;
+    margin-bottom: 5px;
+    border: 1px solid #cdd7e5;
+    border-radius: 5px;
+    font-size: 12px;
+}
+
+/* Danh sách cuộn trong khung cố định — 70 chi nhánh không được đẩy nút Tìm
+   kiếm xuống ngoài màn hình */
+.bctk-list {
+    max-height: 190px;
+    overflow-y: auto;
+    border: 1px solid #e6ecf4;
+    border-radius: 5px;
+    background: #fbfcfe;
+}
+
+.bctk-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 7px;
+    cursor: pointer;
+    line-height: 1.3;
+    font-size: 12px;
+}
+
+.bctk-item:hover { background: #eef4fb; }
+.bctk-item input { margin: 0; flex: 0 0 auto; }
+.bctk-item__label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.bctk-tag {
+    flex: 0 0 auto;
+    font-size: 10px;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+/* Nhóm "Chưa phân kho" — màu cảnh báo để phân biệt với mã kho thật */
+.bctk-tag--warn { background: #fef3c7; color: #92400e; }
+
+.bctk-quick {
+    display: block;
+    width: 100%;
+    margin-top: 5px;
+    padding: 4px 6px;
+    font-size: 11.5px;
+    text-align: left;
+    color: #1d4ed8;
+    background: #f1f6ff;
+    border: 1px dashed #a9c6f5;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.bctk-quick:hover { background: #e2edff; }
+
+.bctk-note { padding: 6px 8px; color: #64748b; font-size: 11.5px; }
+
+/* Tiêu đề nhóm trong khối Mã kho — cho biết mã phân kho bên dưới thuộc site nào */
+.bctk-zonegrp {
+    padding: 3px 7px;
+    background: #e8eef7;
+    border-top: 1px solid #dbe2ea;
+    font-size: 11px;
+    font-weight: 600;
+    color: #334155;
+    position: sticky;
+    top: 0;
+}
+
+.bctk-zonegrp:first-child { border-top: 0; }
+
+/* Ô tích dùng .form-check-input của Bootstrap để có dấu tích; ghim kích thước
+   cho khỏi giãn theo font, và không cho co lại khi nhãn dài xuống nhiều dòng */
+.bctk-filter .form-check-input {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    cursor: pointer;
+}
+
+.bctk-actions { display: flex; gap: 6px; }
+
+.bctk-btn {
+    flex: 1 1 0;
+    height: 30px;
+    border: 1px solid #cdd7e5;
+    border-radius: 5px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 12.5px;
+}
+
+.bctk-btn:disabled { opacity: .5; cursor: not-allowed; }
+.bctk-btn--primary { background: #2563eb; border-color: #2563eb; color: #fff; font-weight: 600; }
+.bctk-btn--primary:hover:not(:disabled) { background: #1d4ed8; }
+
+/* ── Tiến độ ───────────────────────────────────────────────────────────── */
+
+.bctk-progress { margin-top: 9px; }
+
+.bctk-progress__bar {
+    height: 5px;
+    border-radius: 3px;
+    background: #e6ecf4;
+    overflow: hidden;
+}
+
+.bctk-progress__bar span {
+    display: block;
+    height: 100%;
+    width: 0;
+    background: #2563eb;
+    transition: width .2s ease;
+}
+
+.bctk-progress__text { margin-top: 4px; font-size: 11.5px; color: #475569; }
+
+/* ── Bảng số liệu ──────────────────────────────────────────────────────── */
+
+.bctk-result {
+    flex: 1 1 auto;
+    min-width: 0;
+    background: #fff;
+    border: 1px solid #dbe2ea;
+    border-radius: 8px;
+    overflow: hidden;
+    /* Cột dọc: thanh tiêu đề cố định, khung bảng nuốt phần cao còn lại */
+    display: flex;
+    flex-direction: column;
+}
+
+.bctk-result__head {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: #eef2f8;
+    border-bottom: 1px solid #dbe2ea;
+}
+
+.bctk-count { font-size: 12px; color: #475569; }
+
+/* Bảng lấp hết chiều cao còn lại của thẻ — hết mảng trắng phía dưới */
+.bctk-tablewrap { flex: 1 1 auto; min-height: 0; overflow: auto; }
+
+.bctk-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+
+.bctk-table th,
+.bctk-table td {
+    padding: 4px 8px;
+    border-bottom: 1px solid #eef1f6;
+    border-right: 1px solid #f2f5f9;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bctk-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #f4f7fb;
+    font-weight: 600;
+    font-size: 11.5px;
+    text-align: left;
+    border-bottom: 2px solid #cfd9e8;
+}
+
+.bctk-table tbody tr:hover { background: #f6f9ff; }
+
+.bctk-table .c-num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Cột Số lượng đỏ đậm — giữ đúng thói quen nhìn từ phần mềm cũ */
+.bctk-table .c-qty { color: #c00000; font-weight: 700; }
+
+/* Số âm ở các cột khác (SL cần nhập) vẫn đỏ nhưng nhạt hơn, để cột Số lượng
+   giữ được vai trò điểm nhấn chính */
+.bctk-table .c-num.neg { color: #dc2626; font-weight: 600; }
+.bctk-table .c-name { max-width: 300px; }
+.bctk-table .c-zone { font-weight: 600; }
+.bctk-table .c-unit { text-align: center; color: #64748b; }
+
+.bctk-empty td { padding: 22px; text-align: center; color: #64748b; }
+
+.bctk-warn {
+    font-size: 10px;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: #fef3c7;
+    color: #92400e;
+    font-weight: 500;
+}
+
+/* Dòng tổng dính đáy — cuộn giữa 100k dòng vẫn thấy tổng */
+.bctk-table tfoot td {
+    position: sticky;
+    bottom: 0;
+    background: #eef4ff;
+    font-weight: 700;
+    border-top: 2px solid #cfd9e8;
+}
+
+.bctk-hidden { display: none !important; }
