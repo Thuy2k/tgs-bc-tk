@@ -50,8 +50,21 @@ $bctk_today = current_time('Y-m-d');
                         <th class="c-num col-ret">Σ xuất trả</th>
                         <th class="c-num col-sell">Σ xuất bán</th>
                         <th class="c-num col-outb">Σ xuất nội bộ</th>
-                        <th class="c-num col-adj">Σ xuất điều chỉnh</th>
-                        <th class="c-num col-adj">SL điều chỉnh (±)</th>
+                        <?php
+                        /*
+                         * Hai cột này nhìn giống nhau nhưng khác bản chất:
+                         *   - "Σ xuất điều chỉnh" luôn dương, là ĐỘ LỚN phần
+                         *     xuất ra khỏi kho (hiểu ngầm là trừ đi).
+                         *   - "SL điều chỉnh (±)" giữ nguyên dấu của quantity,
+                         *     nên cộng thẳng vào tồn được — dương là tăng kho,
+                         *     âm là giảm.
+                         * Không chú thích thì rất dễ bị hiểu là cột trùng nhau.
+                         */
+                        ?>
+                        <th class="c-num col-adj"
+                            title="Độ lớn phần xuất điều chỉnh (luôn dương, bản chất là trừ kho)">Σ xuất điều chỉnh</th>
+                        <th class="c-num col-adj"
+                            title="Giữ nguyên dấu: dương là tăng kho, âm là giảm — cộng thẳng vào tồn được">SL điều chỉnh (±)</th>
                         <th class="c-num col-close">Σ tồn cuối</th>
                         <th class="c-unit">ĐVT</th>
                     </tr>
