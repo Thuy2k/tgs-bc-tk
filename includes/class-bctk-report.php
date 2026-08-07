@@ -30,6 +30,15 @@ class TGS_BCTK_Report
     const ITEM_TYPE_PURCHASE_ORDER = 9;
     const APPROVER_STATUS_APPROVED = 1;
 
+    /*
+     * Phiếu điều chỉnh ghi item_type = 21, KHÔNG phải 1 hay 2.
+     *
+     * Xem class-tgs-ajax-adjustment.php: cả phiếu lẫn từng dòng đều mang
+     * TGS_LEDGER_TYPE_PRODUCT_EDIT, và quantity là CHÊNH LỆCH có dấu
+     * (tồn mới − tồn cũ), nên có thể âm.
+     */
+    const ITEM_TYPE_ADJUSTMENT = 21;
+
     /**
      * Lấy số liệu tồn của MỘT site, gộp theo (mã hàng, phân kho).
      *
@@ -253,6 +262,7 @@ class TGS_BCTK_Report
         $E = self::ITEM_TYPE_EXPORT;
         $R = 3;  // khách hoàn trả
         $PO = self::ITEM_TYPE_PURCHASE_ORDER;
+        $ADJ = self::ITEM_TYPE_ADJUSTMENT;   // phiếu điều chỉnh, quantity có dấu
 
         /* Biểu thức tồn — giống hệt site_stock_rows(), giữ khớp tuyệt đối */
         $delta = "CASE
@@ -354,9 +364,24 @@ class TGS_BCTK_Report
                     AND l.local_ledger_parent_id IS NULL
                     THEN ABS(li.quantity) ELSE 0 END), 0) AS xuat_dc,
 
+                /*
+                 * SL điều chỉnh (±) — lấy từ PHIẾU ĐIỀU CHỈNH, có dấu.
+                 *
+                 * Trước đây cột này lặp y hệt điều kiện của xuat_dc (item_type
+                 * xuất, không có phiếu cha) nên KHÔNG BAO GIỜ bắt được phiếu
+                 * điều chỉnh: phiếu đó ghi item_type = 21 chứ không phải 1/2.
+                 * Hệ quả là lượng điều chỉnh rơi hết vào cột Khác — sổ vẫn cân
+                 * nhưng nhìn vào không biết là do điều chỉnh.
+                 *
+                 * (Nhắc lại cảnh báo ở đầu khối: TUYỆT ĐỐI không viết dấu ngoặc
+                 *  kép trong chú thích này — cả khối nằm trong một chuỗi PHP
+                 *  mở bằng dấu ngoặc kép, lạc một dấu vào là đóng chuỗi sớm.)
+                 *
+                 * Lấy nguyên quantity chứ không ABS: quantity ở đây là chênh
+                 * lệch tồn mới trừ tồn cũ, âm là giảm, dương là tăng.
+                 */
                 COALESCE(SUM(CASE WHEN {$in_range}
-                    AND li.local_ledger_item_type = {$E}
-                    AND l.local_ledger_parent_id IS NULL
+                    AND li.local_ledger_item_type = {$ADJ}
                     THEN COALESCE(li.quantity, 0) ELSE 0 END), 0) AS dc_signed,
 
                 /*
@@ -426,7 +451,10 @@ class TGS_BCTK_Report
                         - (float) $r['xuat_nb']
                         - (float) $r['xuat_ban']
                         - (float) $r['xuat_tra']
-                        - (float) $r['xuat_dc'];
+                        - (float) $r['xuat_dc']
+                        /* Cộng THẲNG, không đổi dấu: dc_signed đã mang dấu sẵn
+                           (âm là điều chỉnh giảm tồn, dương là tăng) */
+                        + (float) $r['dc_signed'];
 
             return [
                 'sku'       => (string) $r['sku'],
