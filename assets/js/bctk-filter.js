@@ -149,7 +149,49 @@
     var pageRender = null;   // function(rows)
     var pageFooter = null;   // function(visibleRows, totalCount)
 
-    function fetchSite(blogId, zones) {
+    /*
+     * ─── VÌ SAO PHẢI BÁO LỖI RA MẶT ─────────────────────────────────────────
+     *
+     * Trước đây mọi trục trặc đều được đổi thành mảng rỗng: nonce hết hạn,
+     * không đủ quyền, PHP lỗi, rớt mạng — tất cả hiện lên đúng một câu
+     * "Xong · N chi nhánh · 0 dòng", không khác gì kho thật sự không có hàng.
+     * Hệ quả là cùng một website, máy này ra 499 dòng còn máy kia ra 0 dòng mà
+     * không ai biết vì sao, cũng không có gì để lần.
+     *
+     * Từ đây fetchSite trả về { rows, error, expired } thay vì mảng trần, để
+     * chỗ gọi phân biệt được "không có số liệu" với "không lấy được số liệu".
+     */
+    var lastErrors = [];
+
+    /*
+     * Xin nonce mới khi phiên của TRANG đã quá hạn (xem chú thích ở
+     * TGS_BCTK_Ajax::refresh_nonce).
+     *
+     * Gộp chung một lời hứa cho cả loạt: 3 site chạy song song mà cùng hết hạn
+     * thì cả 3 chờ đúng một lượt xin, không xin ba lần.
+     */
+    var nonceRefresh = null;
+
+    function refreshNonce() {
+        if (nonceRefresh) return nonceRefresh;
+
+        nonceRefresh = $.post(CFG.ajaxUrl, { action: 'tgs_bctk_refresh_nonce' })
+            .then(function (res) {
+                if (res && res.success && res.data && res.data.nonce) {
+                    CFG.nonce = res.data.nonce;
+                    return true;
+                }
+                /* Xin không được nghĩa là đã đăng xuất hẳn — phải tải lại trang */
+                return $.Deferred().reject().promise();
+            });
+
+        /* Lượt tìm kiếm sau được phép xin lại từ đầu */
+        nonceRefresh.always(function () { nonceRefresh = null; });
+
+        return nonceRefresh;
+    }
+
+    function fetchSite(blogId, zones, isRetry) {
         var data = {
             action: CFG.action || 'tgs_bctk_fetch_site',
             nonce: CFG.nonce,
@@ -161,10 +203,45 @@
         if ($('#bctkDateFrom').length) { data.date_from = $('#bctkDateFrom').val(); }
         if ($('#bctkDateTo').length)   { data.date_to   = $('#bctkDateTo').val(); }
 
+        /* Nonce hỏng → xin cái mới rồi thử lại ĐÚNG một lần, hỏng nữa thì chịu */
+        function retryOrExpire() {
+            if (isRetry) {
+                return { rows: [], expired: true, error: 'Phiên đăng nhập đã hết hạn' };
+            }
+
+            return refreshNonce().then(function () {
+                return fetchSite(blogId, zones, true);
+            }, function () {
+                return { rows: [], expired: true, error: 'Phiên đăng nhập đã hết hạn' };
+            });
+        }
+
         return $.post(CFG.ajaxUrl, data).then(function (res) {
-            return (res && res.success && res.data && res.data.rows) ? res.data.rows : [];
-        }, function () {
-            return [];   // site lỗi → bỏ qua, không chặn các site còn lại
+            if (res && res.success && res.data && res.data.rows) {
+                return { rows: res.data.rows };
+            }
+
+            /* admin-ajax trả trần "0" (chưa đăng nhập) hoặc "-1" (nonce sai) */
+            if (res === 0 || res === '0' || res === -1 || res === '-1') {
+                return retryOrExpire();
+            }
+
+            /* Máy chủ trả lời được nhưng từ chối — giữ nguyên lý do của nó */
+            return {
+                rows: [],
+                error: (res && res.data && res.data.message) || 'Máy chủ trả về dữ liệu không đọc được'
+            };
+        }, function (xhr) {
+            var status = xhr ? xhr.status : 0;
+
+            if (status === 401 || status === 403) {
+                return retryOrExpire();
+            }
+
+            return {
+                rows: [],
+                error: status ? ('Máy chủ báo lỗi ' + status) : 'Mất kết nối tới máy chủ'
+            };
         });
     }
 
@@ -210,6 +287,7 @@
 
         running = true;
         rows = [];
+        lastErrors = [];
         var done = 0, failed = 0;
 
         $('#bctkProgress').removeClass('bctk-hidden');
@@ -233,8 +311,18 @@
             if (!queue.length) return $.Deferred().resolve().promise();
             var bid = queue.shift();
             return fetchSite(bid, zoneMap[bid] || []).then(function (got) {
-                if (!got.length) failed += 0;
-                rows = rows.concat(got);
+                got = got || {};
+
+                if (got.error) {
+                    failed++;
+                    lastErrors.push({
+                        blog: bid,
+                        message: got.error,
+                        expired: !!got.expired
+                    });
+                }
+
+                rows = rows.concat(got.rows || []);
                 done++;
                 tick();
                 return next();
@@ -250,15 +338,53 @@
             running = false;
             $('#bctkSearch').prop('disabled', false);
             render();
-            $('#bctkProgressText').text('Xong · ' + sites.length + ' chi nhánh · ' + nf.format(rows.length) + ' dòng');
+
+            $('#bctkProgressText').text(
+                'Xong · ' + sites.length + ' chi nhánh · ' + nf.format(rows.length) + ' dòng'
+                + (failed ? ' · ' + failed + ' chi nhánh lỗi' : '')
+            );
+            $('#bctkProgress').toggleClass('bctk-progress--error', failed > 0);
         });
+    }
+
+    /*
+     * Không ra dòng nào thì phải nói rõ VÌ SAO.
+     *
+     * "Thật sự không có số liệu" và "gọi hỏng nên không lấy được số liệu" là
+     * hai chuyện hoàn toàn khác nhau, mà trước đây hiện chung một câu
+     * "Không có dữ liệu." — người dùng tưởng kho trống và đi đối chiếu sai.
+     */
+    function emptyMessage() {
+        if (!lastErrors.length) return 'Không có dữ liệu.';
+
+        var expired = lastErrors.some(function (e) { return e.expired; });
+        if (expired) {
+            return 'Trang đã mở quá lâu nên phiên làm việc hết hạn, không lấy được số liệu.<br>'
+                 + '<button type="button" class="bctk-btn bctk-btn--primary" id="bctkReload" '
+                 + 'style="margin-top:8px">Tải lại trang</button>';
+        }
+
+        return 'Không lấy được số liệu: ' + esc(lastErrors[0].message)
+             + (lastErrors.length > 1
+                 ? ' (và ' + (lastErrors.length - 1) + ' chi nhánh khác cũng lỗi)'
+                 : '');
+    }
+
+    /* Số cột thật của bảng — đếm ở <thead> thay vì ghi cứng, vì mỗi báo cáo
+       trong BC_TK có số cột khác nhau (tồn kho 12, sổ kho 14). */
+    function bodyColspan() {
+        var n = $('#bctkTable thead tr').first().children().length;
+        return n || 12;
     }
 
     // ── Vẽ bảng ─────────────────────────────────────────────────────────────
 
     function render() {
         if (!rows.length) {
-            $('#bctkBody').html('<tr class="bctk-empty"><td colspan="12">Không có dữ liệu.</td></tr>');
+            $('#bctkBody').html(
+                '<tr class="bctk-empty' + (lastErrors.length ? ' bctk-empty--error' : '') + '">'
+                + '<td colspan="' + bodyColspan() + '">' + emptyMessage() + '</td></tr>'
+            );
             $('#bctkFoot').addClass('bctk-hidden');
             $('#bctkRowCount').text('0 dòng');
             return;
@@ -460,6 +586,11 @@
         });
 
         $('#bctkSearch').on('click', run);
+
+        /* Nút do emptyMessage() dựng ra sau khi chạy → phải bắt theo kiểu ủy quyền */
+        $(document).on('click', '#bctkReload', function () {
+            window.location.reload();
+        });
 
         /* Điểm nối cho báo cáo khác: nghe sự kiện này để dùng lại bộ lọc */
         $(document).on('bctk:search', run);

@@ -361,6 +361,10 @@
 
 .bctk-empty td { padding: 22px; text-align: center; color: #64748b; }
 
+/* Không lấy được số liệu ≠ không có số liệu — phải nhìn ra ngay là màu khác */
+.bctk-empty--error td { color: #b42318; background: #fef3f2; }
+.bctk-progress--error .bctk-progress__text { color: #b42318; font-weight: 600; }
+
 .bctk-warn {
     font-size: 10px;
     padding: 0 4px;

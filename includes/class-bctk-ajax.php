@@ -27,6 +27,32 @@ class TGS_BCTK_Ajax
         add_action('wp_ajax_tgs_bctk_fetch_site', [__CLASS__, 'fetch_site']);
         add_action('wp_ajax_tgs_bctk_fetch_ledger', [__CLASS__, 'fetch_ledger']);
         add_action('wp_ajax_tgs_bctk_fetch_purchase', [__CLASS__, 'fetch_purchase']);
+        add_action('wp_ajax_tgs_bctk_refresh_nonce', [__CLASS__, 'refresh_nonce']);
+    }
+
+    /**
+     * Cấp lại nonce cho trang đang mở.
+     *
+     * Nonce được nhúng vào HTML lúc render và chỉ sống 24 giờ, trong khi màn
+     * báo cáo nằm trong hệ thống tab (iframe) nên hoàn toàn có thể mở liên tục
+     * nhiều ngày. Quá hạn thì admin-ajax trả 403 cho MỌI lượt gọi — và vì phía
+     * JS trước đây nuốt lỗi, người dùng chỉ thấy "0 dòng" y như không có số
+     * liệu, bấm Tìm kiếm lại vẫn thế (nonce cũ vẫn nằm trong biến), chỉ tải
+     * lại trang mới hết. Đúng hiện tượng đang gặp.
+     *
+     * Endpoint này CỐ Ý không gọi check_ajax_referer: nonce cần kiểm thì đã hết
+     * hạn rồi, kiểm nữa là bế tắc. Chốt chặn ở đây là phiên đăng nhập —
+     * wp_ajax_ chỉ chạy cho người đã đăng nhập — cộng capability. Trang khác
+     * miền có thể gọi nhưng KHÔNG đọc được phản hồi (không có CORS) nên không
+     * moi được nonce ra.
+     */
+    public static function refresh_nonce()
+    {
+        if (!is_user_logged_in() || !current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Phiên đăng nhập đã kết thúc'], 401);
+        }
+
+        wp_send_json_success(['nonce' => wp_create_nonce(self::NONCE)]);
     }
 
     /**
