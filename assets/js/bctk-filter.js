@@ -433,24 +433,19 @@
     // ── Vẽ bảng ─────────────────────────────────────────────────────────────
 
     /*
-     * ─── VẼ DẦN THEO CUỘN ───────────────────────────────────────────────────
+     * ─── VẼ THEO KHUNG NHÌN ─────────────────────────────────────────────────
      *
-     * Báo cáo gộp 87 chi nhánh ra hơn 100.000 dòng. Vẽ hết một lượt nghĩa là
-     * nhồi khoảng 1,3 TRIỆU thẻ HTML vào trang trong một nhịp — trình duyệt
-     * đứng hình vài giây rồi ì suốt phiên làm việc, vì mọi thao tác sau đó
-     * (cuộn, lọc, xuất) đều phải bò qua ngần ấy thẻ.
+     * Báo cáo gộp 87 chi nhánh ra gần 200.000 dòng. Vẽ hết một lượt là nhồi
+     * hơn 2 TRIỆU thẻ HTML vào trang — trình duyệt đứng hình rồi ì suốt phiên.
      *
-     * Mà không ai đọc hết 100.000 dòng. Người ta xem vài trăm dòng đầu, lọc
-     * xuống, hoặc xuất ra Excel. Nên chỉ vẽ một khúc, cuộn gần hết thì vẽ tiếp.
+     * Nên làm đúng như lưới của phần mềm cũ: giữ dữ liệu trong mảng, chỉ vẽ vài
+     * chục dòng đang lọt vào màn hình, cuộn tới đâu vẽ tới đó. Phần máy móc do
+     * base lo — xem TGSDesignSystem.virtualBody trong tgs-erp-ds.js.
      *
-     * ⚠️ BẪY PHẢI TRÁNH: vẽ dở mà đi lọc hoặc xuất Excel thì chỉ lọc/xuất phần
-     * đã vẽ, KẾT QUẢ SAI MÀ KHÔNG BÁO GÌ. Nên trước hai thao tác đó luôn vẽ nốt
-     * phần còn lại — xem drawRest() và chỗ nối ở cuối file. Thà chờ một nhịp
-     * còn hơn nhận số liệu thiếu mà không biết.
+     * Trang này chỉ khai ba việc mà base không thể tự biết: mỗi dòng vẽ ra sao
+     * (rowHtml), chữ của từng cột là gì (cellTextOf), và lọc thế nào
+     * (wireVirtual). Tất cả đều chạy trên mảng, không đọc DOM.
      */
-    var CHUNK = 1500;
-    var drawnTo = 0;
-
     function rowHtml(r, i) {
         var amount = r.qty * r.price;
 
@@ -478,20 +473,60 @@
             + '</tr>';
     }
 
-    /* Vẽ nốt phần còn lại. Base tự gọi trước khi lọc hoặc xuất Excel. */
-    function drawRest() {
-        var table = document.getElementById('bctkTable');
-        if (table && typeof table.dsEnsureAllRows === 'function') table.dsEnsureAllRows();
+    /*
+     * ─── BA CÁI MÓC CHO KIỂU VẼ THEO KHUNG NHÌN ─────────────────────────────
+     *
+     * Base chỉ biết vẽ và cuộn; nó không biết cột thứ 3 của báo cáo này là
+     * trường nào. Nên trang phải tự khai ba việc: lọc thế nào, cộng tổng thế
+     * nào, xuất Excel thế nào — tất cả trên MẢNG, không đọc DOM.
+     */
+    var viewRows = [];   // mảng sau khi lọc theo cột; dùng cho chân bảng và xuất Excel
+
+    /* Chữ hiện trên màn hình của từng cột — phải khớp ĐÚNG thứ tự cột trong
+       <thead>, vì bộ lọc gửi xuống theo chỉ số cột */
+    function cellTextOf(r, col) {
+        switch (col) {
+            case 0:  return String(r.zone || '');
+            case 1:  return String(r.sku || '');
+            case 2:  return String(r.name || '');
+            case 3:  return String(r.alias || '');
+            case 4:  return fmt(r.qty);
+            case 5:  return fmt(r.price);
+            case 6:  return fmt(r.qty * r.price);
+            case 7:  return r.in_transit ? fmt(r.in_transit) : '';
+            case 8:  return fmt(r.max);
+            case 9:  return fmt(r.min);
+            case 10: return fmt(r.need);
+            case 11: return String(r.unit || '');
+            default: return '';
+        }
     }
 
-    /* Nói rõ đang hiện bao nhiêu trên tổng bao nhiêu, đừng để người dùng tưởng
-       báo cáo chỉ có ngần ấy dòng */
-    function updateCount() {
-        if (!rows.length) { $('#bctkRowCount').text('0 dòng'); return; }
+    function wireVirtual(table) {
+        /* Lọc theo cột: chạy trên mảng rồi đưa mảng mới cho base vẽ lại */
+        table.dsFilterRows = function (cols, matches) {
+            var active = Object.keys(cols).filter(function (i) {
+                var c = cols[i];
+                return c && (c.text || (c.values && c.values.length) ||
+                    c.min !== null && c.min !== undefined ||
+                    c.max !== null && c.max !== undefined);
+            });
 
-        $('#bctkRowCount').text(drawnTo < rows.length
-            ? 'Đang hiện ' + nf.format(drawnTo) + ' / ' + nf.format(rows.length) + ' dòng — cuộn để xem tiếp'
-            : nf.format(rows.length) + ' dòng');
+            viewRows = !active.length ? rows : rows.filter(function (r) {
+                for (var k = 0; k < active.length; k++) {
+                    var col = parseInt(active[k], 10);
+                    if (!matches(cols[active[k]], cellTextOf(r, col))) return false;
+                }
+                return true;
+            });
+
+            table.dsVirtual.setRows(viewRows);
+            recalcFooter();
+        };
+
+        /* Xuất Excel: base vẫn lo phần màu và định dạng, trang chỉ đưa dữ liệu */
+        table.dsExportData = function () { return viewRows; };
+        table.dsExportCell = cellTextOf;
     }
 
     function render() {
@@ -502,22 +537,20 @@
             );
             $('#bctkFoot').addClass('bctk-hidden');
             $('#bctkRowCount').text('0 dòng');
-            drawnTo = 0;
+            viewRows = [];
             return;
         }
 
         /*
-         * Trang tự vẽ (sổ kho chẳng hạn) thì nhường quyền — và coi như đã vẽ
-         * xong hết.
+         * Trang tự vẽ (sổ kho chẳng hạn) thì nhường quyền.
          *
-         * Bắt buộc phải đánh dấu, nếu không thì appendChunk() tưởng còn dòng
-         * chưa vẽ và chèn thêm dòng theo mẫu 12 cột của báo cáo tồn kho vào
-         * bảng sổ kho vốn có 14 cột — vỡ hẳn bảng. Các màn tự vẽ đều gộp dữ
-         * liệu trước nên số dòng nhỏ, không cần vẽ dần.
+         * Các màn tự vẽ đều gộp dữ liệu trước khi vẽ (sổ kho gộp theo mã hàng,
+         * 199.158 dòng còn 499) nên số dòng nhỏ, vẽ thẳng là đủ nhanh — không
+         * cần tới phần vẽ theo khung nhìn.
          */
         if (pageRender) {
             pageRender(rows);
-            drawnTo = rows.length;
+            viewRows = rows;
             $('#bctkFoot').removeClass('bctk-hidden');
             recalcFooter();
             return;
@@ -527,27 +560,25 @@
         rows.sort(function (a, b) { return b.qty - a.qty; });
 
         /*
-         * Vẽ dần do base lo (TGSDesignSystem.progressiveBody): chỉ vẽ khúc đầu,
-         * cuộn gần hết thì vẽ tiếp, và tự vẽ nốt trước khi lọc hoặc xuất Excel.
-         * Không còn bản chép riêng ở đây nữa.
+         * Vẽ theo khung nhìn — giống hệt lưới của phần mềm cũ.
+         *
+         * DOM chỉ giữ vài chục dòng dù báo cáo 200.000 dòng, nên cuộn mượt và
+         * không phình bộ nhớ. Lọc, cộng tổng, xuất Excel đều chạy trên mảng
+         * `rows` chứ không đọc DOM — xem ba hàm nối ở dưới.
          */
-        drawnTo = 0;
-
+        var table = document.getElementById('bctkTable');
         var ds = window.TGSDesignSystem;
-        if (ds && ds.progressiveBody) {
-            ds.progressiveBody({
-                table: document.getElementById('bctkTable'),
-                rows: rows,
-                rowHtml: rowHtml,
-                chunk: CHUNK,
-                onDraw: function (done) { drawnTo = done; updateCount(); }
-            });
+
+        if (ds && ds.virtualBody && table) {
+            viewRows = rows;
+            ds.virtualBody({ table: table, rows: rows, rowHtml: rowHtml });
+            wireVirtual(table);
         } else {
             /* Không có base thì vẽ thẳng — thà chậm còn hơn trắng bảng */
             var buf = [];
             for (var i = 0; i < rows.length; i++) buf.push(rowHtml(rows[i], i));
             $('#bctkBody').html(buf.join(''));
-            drawnTo = rows.length;
+            viewRows = rows;
         }
 
         $('#bctkFoot').removeClass('bctk-hidden');
@@ -597,22 +628,16 @@
         }
 
         /*
-         * Đang vẽ dở thì cộng thẳng trên MẢNG DỮ LIỆU, không đọc DOM.
+         * Cộng trên MẢNG, không đọc DOM.
          *
-         * Đọc DOM lúc này chỉ thấy phần đã vẽ, chân bảng sẽ ra tổng của 1.500
-         * dòng trong khi báo cáo có 108.000 — một con số sai mà nhìn thì không
-         * có gì đáng ngờ. Chưa vẽ hết thì cũng chưa lọc được (lọc luôn kéo theo
-         * vẽ nốt), nên cộng cả mảng là đúng.
+         * Bảng vẽ theo khung nhìn nên DOM chỉ có vài chục dòng đang hiện — đọc
+         * DOM thì chân bảng ra tổng của 34 dòng trong khi báo cáo có 199.158.
+         * Một con số sai mà nhìn không có gì đáng ngờ.
+         *
+         * viewRows là mảng sau khi lọc theo cột, nên dòng tổng luôn khớp với
+         * những gì người dùng đang xem — kể cả đang lọc.
          */
-        if (drawnTo < rows.length) {
-            rows.forEach(add);
-        } else {
-            $('#bctkBody tr[data-i]').each(function () {
-                if (this.style.display === 'none') return;
-                var r = rows[parseInt(this.getAttribute('data-i'), 10)];
-                if (r) add(r);
-            });
-        }
+        (viewRows.length ? viewRows : rows).forEach(add);
 
         $('#fQty').text(fmt(t.qty));
         $('#fAmount').text(fmt(t.amount));
@@ -620,11 +645,6 @@
         $('#fMax').text(fmt(t.max));
         $('#fMin').text(fmt(t.min));
         $('#fNeed').text(fmt(t.need));
-
-        if (drawnTo < rows.length) {
-            updateCount();
-            return;
-        }
 
         // Nói rõ đang xem bao nhiêu trên tổng bao nhiêu khi có lọc
         $('#bctkRowCount').text(
@@ -727,11 +747,6 @@
         });
 
         $('#bctkSearch').on('click', run);
-
-        /*
-         * Cuộn để vẽ tiếp, vẽ nốt trước khi lọc / xuất Excel — base lo hết,
-         * xem TGSDesignSystem.progressiveBody trong tgs-erp-ds.js.
-         */
 
         /* Nút do emptyMessage() dựng ra sau khi chạy → phải bắt theo kiểu ủy quyền */
         $(document).on('click', '#bctkReload', function () {
