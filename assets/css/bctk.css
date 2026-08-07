@@ -324,15 +324,6 @@
 
 .bctk-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 
-/*
- * Bật sau khi bctk-filter.js đã đo và ghi cứng bề rộng từng cột.
- *
- * Với table-layout mặc định (auto), bề rộng cột phụ thuộc nội dung MỌI dòng,
- * nên mỗi lần vẽ thêm một khúc là trình duyệt đo lại cả bảng — báo cáo trăm
- * nghìn dòng thì càng cuộn càng ì, và cột cứ nhảy bề rộng mỗi khi gặp tên hàng
- * dài hơn. Khoá lại rồi thì mỗi dòng chỉ được đo đúng một lần.
- */
-.bctk-table--fixed { table-layout: fixed; }
 
 .bctk-table th,
 .bctk-table td {
