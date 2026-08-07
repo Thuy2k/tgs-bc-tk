@@ -432,6 +432,127 @@
 
     // ── Vẽ bảng ─────────────────────────────────────────────────────────────
 
+    /*
+     * ─── VẼ DẦN THEO CUỘN ───────────────────────────────────────────────────
+     *
+     * Báo cáo gộp 87 chi nhánh ra hơn 100.000 dòng. Vẽ hết một lượt nghĩa là
+     * nhồi khoảng 1,3 TRIỆU thẻ HTML vào trang trong một nhịp — trình duyệt
+     * đứng hình vài giây rồi ì suốt phiên làm việc, vì mọi thao tác sau đó
+     * (cuộn, lọc, xuất) đều phải bò qua ngần ấy thẻ.
+     *
+     * Mà không ai đọc hết 100.000 dòng. Người ta xem vài trăm dòng đầu, lọc
+     * xuống, hoặc xuất ra Excel. Nên chỉ vẽ một khúc, cuộn gần hết thì vẽ tiếp.
+     *
+     * ⚠️ BẪY PHẢI TRÁNH: vẽ dở mà đi lọc hoặc xuất Excel thì chỉ lọc/xuất phần
+     * đã vẽ, KẾT QUẢ SAI MÀ KHÔNG BÁO GÌ. Nên trước hai thao tác đó luôn vẽ nốt
+     * phần còn lại — xem drawRest() và chỗ nối ở cuối file. Thà chờ một nhịp
+     * còn hơn nhận số liệu thiếu mà không biết.
+     */
+    var CHUNK = 1500;
+    var drawnTo = 0;
+
+    function rowHtml(r, i) {
+        var amount = r.qty * r.price;
+
+        /*
+         * Gắn chỉ số dòng vào <tr> để lúc cộng lại còn tra ngược về số gốc
+         * trong mảng rows. Đọc ngược từ chữ trong ô thì phải bóc dấu phân cách
+         * nghìn và ký hiệu tiền — vừa chậm vừa dễ sai số.
+         */
+        return '<tr data-i="' + i + '">'
+            + '<td class="c-zone">' + esc(r.zone)
+                + (r.no_zone ? ' <span class="bctk-warn" title="Dữ liệu chưa gán phân kho">chưa phân kho</span>' : '')
+            + '</td>'
+            + '<td class="c-sku">' + esc(r.sku) + '</td>'
+            + '<td class="c-name">' + esc(r.name) + '</td>'
+            + '<td class="c-alias">' + esc(r.alias) + '</td>'
+            // Số lượng để đỏ đậm giống phần mềm cũ — mọi người đang quen mắt
+            + '<td class="c-num c-qty' + (r.qty < 0 ? ' neg' : '') + '">' + fmt(r.qty) + '</td>'
+            + '<td class="c-num">' + fmt(r.price) + '</td>'
+            + '<td class="c-num">' + fmt(amount) + '</td>'
+            + '<td class="c-num">' + (r.in_transit ? fmt(r.in_transit) : '') + '</td>'
+            + '<td class="c-num">' + fmt(r.max) + '</td>'
+            + '<td class="c-num">' + fmt(r.min) + '</td>'
+            + '<td class="c-num' + (r.need < 0 ? ' neg' : '') + '">' + fmt(r.need) + '</td>'
+            + '<td class="c-unit">' + esc(r.unit) + '</td>'
+            + '</tr>';
+    }
+
+    /*
+     * ─── KHOÁ BỀ RỘNG CỘT SAU KHÚC ĐẦU ──────────────────────────────────────
+     *
+     * Bảng để table-layout mặc định (auto) thì bề rộng cột phụ thuộc nội dung
+     * MỌI dòng — nên mỗi lần thêm một khúc, trình duyệt phải đo lại cả bảng.
+     * Khúc thứ 73 là đo lại 108.000 dòng.
+     *
+     * Cộng dồn 73 khúc ra hơn 4 TRIỆU lượt đo dòng, tức vẽ dần còn tệ hơn vẽ
+     * một lần tới 37 lần nếu người dùng cuộn tới cuối. Chưa kể bề rộng cột nhảy
+     * liên tục mỗi khi có tên hàng dài hơn xuất hiện — chữ đang đọc bị đẩy chạy.
+     *
+     * Đo một lần trên khúc đầu, ghi cứng bề rộng, rồi chuyển sang layout fixed.
+     * Từ đó mỗi dòng chỉ được đo đúng một lần.
+     */
+    function lockColumnWidths() {
+        var table = document.getElementById('bctkTable');
+        if (!table || !table.tHead || table.classList.contains('bctk-table--fixed')) return;
+
+        var ths = table.tHead.rows[0].cells;
+        var w = [];
+        for (var i = 0; i < ths.length; i++) w.push(ths[i].getBoundingClientRect().width);
+
+        /* Chưa dựng xong bố cục thì đừng khoá — khoá theo số 0 là hỏng bảng */
+        if (!w.length || !w[0]) return;
+
+        for (var j = 0; j < ths.length; j++) ths[j].style.width = Math.round(w[j]) + 'px';
+        table.classList.add('bctk-table--fixed');
+    }
+
+    function unlockColumnWidths() {
+        var table = document.getElementById('bctkTable');
+        if (!table || !table.tHead) return;
+
+        table.classList.remove('bctk-table--fixed');
+        var ths = table.tHead.rows[0].cells;
+        for (var i = 0; i < ths.length; i++) ths[i].style.width = '';
+    }
+
+    function appendChunk() {
+        if (drawnTo >= rows.length) return false;
+
+        var body = document.getElementById('bctkBody');
+        if (!body) return false;
+
+        var end = Math.min(drawnTo + CHUNK, rows.length);
+        var buf = [];
+        for (var i = drawnTo; i < end; i++) buf.push(rowHtml(rows[i], i));
+
+        body.insertAdjacentHTML('beforeend', buf.join(''));
+        drawnTo = end;
+
+        /* Khoá ngay sau khúc ĐẦU TIÊN: lúc đó đã có dữ liệu thật để đo, mà bảng
+           còn nhỏ nên đo rất nhanh */
+        lockColumnWidths();
+
+        updateCount();
+        return true;
+    }
+
+    /* Vẽ nốt phần còn lại. Gọi trước khi lọc hoặc xuất Excel. */
+    function drawRest() {
+        if (drawnTo >= rows.length) return;
+        while (appendChunk()) { /* vẽ tới hết */ }
+    }
+
+    /* Nói rõ đang hiện bao nhiêu trên tổng bao nhiêu, đừng để người dùng tưởng
+       báo cáo chỉ có ngần ấy dòng */
+    function updateCount() {
+        if (!rows.length) { $('#bctkRowCount').text('0 dòng'); return; }
+
+        $('#bctkRowCount').text(drawnTo < rows.length
+            ? 'Đang hiện ' + nf.format(drawnTo) + ' / ' + nf.format(rows.length) + ' dòng — cuộn để xem tiếp'
+            : nf.format(rows.length) + ' dòng');
+    }
+
     function render() {
         if (!rows.length) {
             $('#bctkBody').html(
@@ -440,12 +561,22 @@
             );
             $('#bctkFoot').addClass('bctk-hidden');
             $('#bctkRowCount').text('0 dòng');
+            drawnTo = 0;
             return;
         }
 
-        /* Trang tự vẽ (sổ kho chẳng hạn) thì nhường quyền */
+        /*
+         * Trang tự vẽ (sổ kho chẳng hạn) thì nhường quyền — và coi như đã vẽ
+         * xong hết.
+         *
+         * Bắt buộc phải đánh dấu, nếu không thì appendChunk() tưởng còn dòng
+         * chưa vẽ và chèn thêm dòng theo mẫu 12 cột của báo cáo tồn kho vào
+         * bảng sổ kho vốn có 14 cột — vỡ hẳn bảng. Các màn tự vẽ đều gộp dữ
+         * liệu trước nên số dòng nhỏ, không cần vẽ dần.
+         */
         if (pageRender) {
             pageRender(rows);
+            drawnTo = rows.length;
             $('#bctkFoot').removeClass('bctk-hidden');
             recalcFooter();
             return;
@@ -454,37 +585,14 @@
         // Sắp theo số lượng giảm dần — giống phần mềm cũ, hàng nhiều nằm trên
         rows.sort(function (a, b) { return b.qty - a.qty; });
 
-        var html = new Array(rows.length);
+        drawnTo = 0;
+        $('#bctkBody').empty();
 
-        for (var i = 0; i < rows.length; i++) {
-            var r = rows[i];
-            var amount = r.qty * r.price;
+        /* Bỏ khoá trước đã: lượt tìm mới có dữ liệu khác, bề rộng cột phải được
+           đo lại theo dữ liệu mới chứ không giữ số của lượt trước */
+        unlockColumnWidths();
 
-            /*
-             * Gắn chỉ số dòng vào <tr> để lúc cộng lại còn tra ngược về số gốc
-             * trong mảng rows. Đọc ngược từ chữ trong ô thì phải bóc dấu phân
-             * cách nghìn và ký hiệu tiền — vừa chậm vừa dễ sai số.
-             */
-            html[i] = '<tr data-i="' + i + '">'
-                + '<td class="c-zone">' + esc(r.zone)
-                    + (r.no_zone ? ' <span class="bctk-warn" title="Dữ liệu chưa gán phân kho">chưa phân kho</span>' : '')
-                + '</td>'
-                + '<td class="c-sku">' + esc(r.sku) + '</td>'
-                + '<td class="c-name">' + esc(r.name) + '</td>'
-                + '<td class="c-alias">' + esc(r.alias) + '</td>'
-                // Số lượng để đỏ đậm giống phần mềm cũ — mọi người đang quen mắt
-                + '<td class="c-num c-qty' + (r.qty < 0 ? ' neg' : '') + '">' + fmt(r.qty) + '</td>'
-                + '<td class="c-num">' + fmt(r.price) + '</td>'
-                + '<td class="c-num">' + fmt(amount) + '</td>'
-                + '<td class="c-num">' + (r.in_transit ? fmt(r.in_transit) : '') + '</td>'
-                + '<td class="c-num">' + fmt(r.max) + '</td>'
-                + '<td class="c-num">' + fmt(r.min) + '</td>'
-                + '<td class="c-num' + (r.need < 0 ? ' neg' : '') + '">' + fmt(r.need) + '</td>'
-                + '<td class="c-unit">' + esc(r.unit) + '</td>'
-                + '</tr>';
-        }
-
-        $('#bctkBody').html(html.join(''));
+        appendChunk();
         $('#bctkFoot').removeClass('bctk-hidden');
         recalcFooter();
     }
@@ -521,12 +629,7 @@
         var t = { qty: 0, amount: 0, transit: 0, max: 0, min: 0, need: 0 };
         var shown = 0;
 
-        $('#bctkBody tr[data-i]').each(function () {
-            if (this.style.display === 'none') return;
-
-            var r = rows[parseInt(this.getAttribute('data-i'), 10)];
-            if (!r) return;
-
+        function add(r) {
             shown++;
             t.qty     += r.qty;
             t.amount  += r.qty * r.price;
@@ -534,7 +637,25 @@
             t.max     += (r.max || 0);
             t.min     += (r.min || 0);
             t.need    += (r.need || 0);
-        });
+        }
+
+        /*
+         * Đang vẽ dở thì cộng thẳng trên MẢNG DỮ LIỆU, không đọc DOM.
+         *
+         * Đọc DOM lúc này chỉ thấy phần đã vẽ, chân bảng sẽ ra tổng của 1.500
+         * dòng trong khi báo cáo có 108.000 — một con số sai mà nhìn thì không
+         * có gì đáng ngờ. Chưa vẽ hết thì cũng chưa lọc được (lọc luôn kéo theo
+         * vẽ nốt), nên cộng cả mảng là đúng.
+         */
+        if (drawnTo < rows.length) {
+            rows.forEach(add);
+        } else {
+            $('#bctkBody tr[data-i]').each(function () {
+                if (this.style.display === 'none') return;
+                var r = rows[parseInt(this.getAttribute('data-i'), 10)];
+                if (r) add(r);
+            });
+        }
 
         $('#fQty').text(fmt(t.qty));
         $('#fAmount').text(fmt(t.amount));
@@ -542,6 +663,11 @@
         $('#fMax').text(fmt(t.max));
         $('#fMin').text(fmt(t.min));
         $('#fNeed').text(fmt(t.need));
+
+        if (drawnTo < rows.length) {
+            updateCount();
+            return;
+        }
 
         // Nói rõ đang xem bao nhiêu trên tổng bao nhiêu khi có lọc
         $('#bctkRowCount').text(
@@ -644,6 +770,30 @@
         });
 
         $('#bctkSearch').on('click', run);
+
+        /* Cuộn gần chạm đáy thì vẽ tiếp một khúc — xem chú thích ở appendChunk() */
+        $('.bctk-tablewrap').on('scroll', function () {
+            if (this.scrollTop + this.clientHeight > this.scrollHeight - 600) appendChunk();
+        });
+
+        /*
+         * ─── HAI CHỖ BẮT BUỘC PHẢI VẼ NỐT TRƯỚC ─────────────────────────────
+         *
+         * Lọc theo cột và xuất Excel đều làm việc trên các dòng ĐANG CÓ TRONG
+         * DOM. Đang vẽ dở mà chạy hai thứ đó thì kết quả chỉ tính trên phần đã
+         * vẽ — lọc ra thiếu dòng, file Excel thiếu dữ liệu, mà không có dấu hiệu
+         * nào cho thấy đang thiếu. Đúng loại lỗi nguy hiểm nhất với báo cáo đối
+         * chiếu. Thà chờ một nhịp.
+         */
+        var tableEl = document.getElementById('bctkTable');
+        if (tableEl) tableEl.dsBeforeFilter = drawRest;
+
+        /* Bắt ở pha "capture" để chạy TRƯỚC trình xử lý xuất Excel của
+           tgs-erp-ds.js, vốn gắn ở pha thường trên document */
+        document.addEventListener('click', function (e) {
+            var btn = e.target.closest && e.target.closest('[data-ds-export-excel]');
+            if (btn) drawRest();
+        }, true);
 
         /* Nút do emptyMessage() dựng ra sau khi chạy → phải bắt theo kiểu ủy quyền */
         $(document).on('click', '#bctkReload', function () {
