@@ -90,6 +90,7 @@
     function onSitesChanged() {
         refreshQuick();
         refreshZones();
+        clearIfNothingSelected();
     }
 
     /*
@@ -162,6 +163,10 @@
      * chỗ gọi phân biệt được "không có số liệu" với "không lấy được số liệu".
      */
     var lastErrors = [];
+
+    /* Lý do bảng đang trống, khi lý do đó KHÔNG phải lỗi — ví dụ chưa chọn
+       tiêu chí. Có nó thì mới nói đúng chuyện, thay vì "Không có dữ liệu." */
+    var emptyReason = '';
 
     /*
      * Xin nonce mới khi phiên của TRANG đã quá hạn (xem chú thích ở
@@ -245,11 +250,52 @@
         });
     }
 
+    /*
+     * ─── BỎ CHỌN HẾT THÌ BẢNG PHẢI TRỐNG THEO ────────────────────────────────
+     *
+     * Trước đây bỏ hết tiêu chí rồi bấm Tìm kiếm chỉ hiện một lời nhắc, còn
+     * bảng vẫn trơ nguyên kết quả của lượt tìm TRƯỚC. Nguy hiểm: con số trên
+     * màn hình không còn thuộc về tiêu chí đang chọn, mà nhìn thì y hệt kết quả
+     * thật — đọc nhầm là đối chiếu sai.
+     *
+     * Số liệu bao giờ cũng phải khớp với tiêu chí đang hiện. Không đủ tiêu chí
+     * để chạy thì dọn bảng, và nói rõ đang thiếu gì.
+     */
+    function clearResults(reason) {
+        rows = [];
+        lastErrors = [];
+        emptyReason = reason || '';
+
+        render();
+
+        $('#bctkProgress').addClass('bctk-hidden').removeClass('bctk-progress--error');
+        $('#bctkProgressText').text('');
+        $('#bctkProgressFill').css('width', '0%');
+    }
+
+    /* Đủ tiêu chí để chạy chưa: phải có chi nhánh, và phải có mã kho khi khối
+       mã kho thật sự có gì để chọn */
+    function hasSelection() {
+        if (!selectedSites().length) return false;
+        if ($('.bctk-zone').length && !$('.bctk-zone:checked').length) return false;
+        return true;
+    }
+
+    /* Bỏ tích tới mức không còn tiêu chí nào → dọn bảng ngay, không đợi bấm
+       Tìm kiếm. Để nguyên số cũ trên màn hình là mời người dùng đọc nhầm. */
+    function clearIfNothingSelected() {
+        if (running || hasSelection()) return;
+        if (!rows.length) return;   // đang trống sẵn thì thôi
+
+        clearResults('Chưa chọn tiêu chí. Chọn chi nhánh và mã kho rồi bấm Tìm kiếm.');
+    }
+
     function run() {
         if (running) return;
 
         var sites = selectedSites();
         if (!sites.length) {
+            clearResults('Chưa chọn chi nhánh nào. Tích ít nhất một chi nhánh rồi bấm Tìm kiếm.');
             alert('Chọn ít nhất một chi nhánh.');
             return;
         }
@@ -272,6 +318,7 @@
             // Chỉ đòi khi thật sự có mã để chọn — chi nhánh chưa khai báo phân
             // kho thì không thể bắt người dùng chọn thứ không tồn tại
             if ($('.bctk-zone').length) {
+                clearResults('Chưa chọn mã kho. Tích ít nhất một mã ở khối "MÃ KHO" rồi bấm Tìm kiếm.');
                 alert('Chọn ít nhất một mã kho ở khối "MÃ KHO" bên dưới.');
                 $('#bctkZoneGroup').addClass('bctk-flash');
                 setTimeout(function () { $('#bctkZoneGroup').removeClass('bctk-flash'); }, 1200);
@@ -280,10 +327,14 @@
         } else {
             sites = sites.filter(function (id) { return zoneBlog.indexOf(id) !== -1; });
             if (!sites.length) {
+                clearResults('Mã kho đang chọn không thuộc chi nhánh nào đã tích.');
                 alert('Mã kho đang chọn không thuộc chi nhánh nào đã tích.');
                 return;
             }
         }
+
+        /* Chạy được rồi thì xoá lý do trống của lượt trước */
+        emptyReason = '';
 
         running = true;
         rows = [];
@@ -355,7 +406,9 @@
      * "Không có dữ liệu." — người dùng tưởng kho trống và đi đối chiếu sai.
      */
     function emptyMessage() {
-        if (!lastErrors.length) return 'Không có dữ liệu.';
+        if (!lastErrors.length) {
+            return emptyReason || 'Không có dữ liệu.';
+        }
 
         var expired = lastErrors.some(function (e) { return e.expired; });
         if (expired) {
@@ -543,7 +596,12 @@
            những mã bị ẩn thì người dùng không thấy mình vừa chọn thêm gì */
         $('#bctkCheckAllZones').on('change', function () {
             $('.bctk-zone').filter(':visible').prop('checked', this.checked);
+            clearIfNothingSelected();
         });
+
+        /* Ô mã kho do refreshZones() dựng lại mỗi lần đổi chi nhánh, nên phải
+           bắt theo kiểu ủy quyền chứ không gắn thẳng vào từng ô */
+        $(document).on('change', '.bctk-zone', clearIfNothingSelected);
 
         /*
          * Lọc mã kho. Kho có thể khai báo hàng chục mã, chưa kể gộp nhiều chi
