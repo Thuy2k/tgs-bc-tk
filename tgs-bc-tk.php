@@ -113,6 +113,13 @@ class TGS_BCTK_Plugin
             TGS_BCTK_VERSION . '.' . @filemtime(TGS_BCTK_DIR . 'assets/css/bctk.css')
         );
 
+        /*
+         * Không nạp thư viện xuất Excel có định dạng ở đây.
+         *
+         * Nó đã nằm trong main-layout.php của tgs_shop_management, dùng chung
+         * cho mọi màn — vì nút "Xuất Excel" do tgs-erp-ds.js tự sinh cho mọi
+         * bảng chứ không riêng báo cáo BC_TK.
+         */
         wp_enqueue_script(
             'tgs-bctk-filter',
             TGS_BCTK_URL . 'assets/js/bctk-filter.js',
