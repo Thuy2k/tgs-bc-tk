@@ -442,9 +442,9 @@
      * chục dòng đang lọt vào màn hình, cuộn tới đâu vẽ tới đó. Phần máy móc do
      * base lo — xem TGSDesignSystem.virtualBody trong tgs-erp-ds.js.
      *
-     * Trang này chỉ khai ba việc mà base không thể tự biết: mỗi dòng vẽ ra sao
-     * (rowHtml), chữ của từng cột là gì (cellTextOf), và lọc thế nào
-     * (wireVirtual). Tất cả đều chạy trên mảng, không đọc DOM.
+     * Trang này chỉ khai HAI việc mà base không thể tự biết: mỗi dòng vẽ ra sao
+     * (rowHtml) và chữ của từng cột là gì (cellTextOf). Lọc theo cột, cộng dòng
+     * tổng và xuất Excel thì base tự suy ra từ cellTextOf.
      */
     function rowHtml(r, i) {
         var amount = r.qty * r.price;
@@ -502,32 +502,6 @@
         }
     }
 
-    function wireVirtual(table) {
-        /* Lọc theo cột: chạy trên mảng rồi đưa mảng mới cho base vẽ lại */
-        table.dsFilterRows = function (cols, matches) {
-            var active = Object.keys(cols).filter(function (i) {
-                var c = cols[i];
-                return c && (c.text || (c.values && c.values.length) ||
-                    c.min !== null && c.min !== undefined ||
-                    c.max !== null && c.max !== undefined);
-            });
-
-            viewRows = !active.length ? rows : rows.filter(function (r) {
-                for (var k = 0; k < active.length; k++) {
-                    var col = parseInt(active[k], 10);
-                    if (!matches(cols[active[k]], cellTextOf(r, col))) return false;
-                }
-                return true;
-            });
-
-            table.dsVirtual.setRows(viewRows);
-            recalcFooter();
-        };
-
-        /* Xuất Excel: base vẫn lo phần màu và định dạng, trang chỉ đưa dữ liệu */
-        table.dsExportData = function () { return viewRows; };
-        table.dsExportCell = cellTextOf;
-    }
 
     function render() {
         if (!rows.length) {
@@ -571,8 +545,14 @@
 
         if (ds && ds.virtualBody && table) {
             viewRows = rows;
-            ds.virtualBody({ table: table, rows: rows, rowHtml: rowHtml });
-            wireVirtual(table);
+            ds.virtualBody({
+                table: table,
+                rows: rows,
+                rowHtml: rowHtml,
+                /* Khai cellText là base tự lo nốt lọc theo cột và xuất Excel */
+                cellText: cellTextOf,
+                onFilter: function (daLoc) { viewRows = daLoc; recalcFooter(); }
+            });
         } else {
             /* Không có base thì vẽ thẳng — thà chậm còn hơn trắng bảng */
             var buf = [];
