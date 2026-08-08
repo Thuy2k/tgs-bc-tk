@@ -670,4 +670,123 @@ class TGS_BCTK_Report
 
         return $map;
     }
+
+    /**
+     * SỔ CHĂM SÓC KHÁCH HÀNG — ai đã mua gì, ngày nào, ở kho/shop nào.
+     *
+     * ── ĐƯỜNG ĐI TỚI KHÁCH HÀNG ─────────────────────────────────────────────
+     *
+     * Hàng bán ra KHÔNG nằm thẳng trên phiếu bán. Nó nằm trên PHIẾU XUẤT, còn
+     * phiếu bán là CHA của phiếu xuất đó:
+     *
+     *     dòng hàng (item_type = 2, xuất)
+     *        └── phiếu xuất  (l)
+     *              └── phiếu bán hàng  (p, local_ledger_type = 10)
+     *                    └── local_ledger_person_id → khách hàng
+     *
+     * Đúng đường mà cột Σ xuất bán của Sổ kho theo mặt hàng đang dùng, nên hai
+     * báo cáo bao giờ cũng khớp nhau về phạm vi.
+     *
+     * ── VÌ SAO QUÉT CẢ SITE KHO ─────────────────────────────────────────────
+     *
+     * Kho về nguyên tắc không bán lẻ, nhưng vẫn có người bán tại kho bằng POS.
+     * Bỏ site kho ra ngoài là mất đúng những đơn bất thường mà người ta cần soi
+     * nhất. Nên quét hết, rồi để cột Kho nói rõ đơn đó phát sinh ở đâu.
+     *
+     * @param bool $is_warehouse Site kho thì mới lọc theo mã phân kho; site shop
+     *                           để trống cột phân kho nên lọc vào là ra rỗng.
+     */
+    public static function site_cskh_rows($blog_id, array $zones, $is_warehouse, $date_from, $date_to)
+    {
+        global $wpdb;
+
+        $prefix       = $wpdb->get_blog_prefix($blog_id);
+        $item_table   = $prefix . 'local_ledger_item';
+        $ledger_table = $prefix . 'local_ledger';
+        $person_table = $prefix . 'local_ledger_person';
+
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $item_table)) !== $item_table) {
+            return [];
+        }
+
+        $from = $date_from . ' 00:00:00';
+        $to   = $date_to   . ' 23:59:59';
+
+        $A    = self::APPROVER_STATUS_APPROVED;
+        $E    = self::ITEM_TYPE_EXPORT;
+        $SALE = 10;   // phiếu bán hàng
+
+        $where = [
+            "li.local_ledger_item_type = {$E}",
+            "p.local_ledger_type = {$SALE}",
+            "l.local_ledger_approver_status = {$A}",
+            "(li.is_deleted = 0 OR li.is_deleted IS NULL)",
+            "(l.is_deleted = 0 OR l.is_deleted IS NULL)",
+            "(p.is_deleted = 0 OR p.is_deleted IS NULL)",
+        ];
+
+        /* Lọc theo NGÀY BÁN (phiếu cha), không theo ngày tạo dòng hàng — người
+           dùng tra theo ngày khách mua, và đó là ngày trên phiếu bán */
+        $params = [];
+        $where[] = 'p.created_at BETWEEN %s AND %s';
+        $params[] = $from;
+        $params[] = $to;
+
+        if ($is_warehouse && !empty($zones)) {
+            $want_none = in_array(TGS_BCTK_Sites::ZONE_NONE, $zones, true);
+            $real      = array_values(array_filter($zones, static function ($z) {
+                return $z !== TGS_BCTK_Sites::ZONE_NONE;
+            }));
+
+            $parts = [];
+            if (!empty($real)) {
+                $parts[] = 'li.local_ledger_item_warehouse_zone IN ('
+                         . implode(',', array_fill(0, count($real), '%s')) . ')';
+                $params = array_merge($params, $real);
+            }
+            if ($want_none) {
+                $parts[] = "(li.local_ledger_item_warehouse_zone IS NULL"
+                         . " OR li.local_ledger_item_warehouse_zone = '')";
+            }
+            if ($parts) {
+                $where[] = '(' . implode(' OR ', $parts) . ')';
+            }
+        }
+
+        $where_sql = implode(' AND ', $where);
+
+        /*
+         * Mỗi dòng hàng là MỘT dòng trong sổ, không gộp.
+         *
+         * Sổ này để tra cứu từng lượt mua chứ không phải để cộng số, nên gộp
+         * lại là mất đúng thứ người dùng cần: khách đó mua mã gì, hôm nào, mấy
+         * cái. Giống hệt cách sổ CSKH của phần mềm cũ liệt kê.
+         */
+        $sql = "
+            SELECT
+                p.local_ledger_code                        AS pbh,
+                p.created_at                               AS ngay_mua,
+                li.local_product_sku                       AS sku,
+                li.quantity                                AS qty,
+                COALESCE(li.local_ledger_item_warehouse_zone, '') AS zone,
+                COALESCE(li.local_ledger_item_note, '')    AS ghi_chu,
+                COALESCE(pe.local_ledger_person_code, '')  AS kh_ma,
+                COALESCE(pe.local_ledger_person_name, '')  AS kh_ten,
+                COALESCE(pe.local_ledger_person_phone, '') AS kh_dt,
+                COALESCE(pe.local_ledger_person_address, '') AS kh_dchi,
+                pe.local_ledger_person_baby_birthdate      AS kh_ns
+            FROM {$item_table} li
+            JOIN {$ledger_table} l ON l.local_ledger_id = li.local_ledger_id
+            JOIN {$ledger_table} p ON p.local_ledger_id = l.local_ledger_parent_id
+            LEFT JOIN {$person_table} pe ON pe.local_ledger_person_id = p.local_ledger_person_id
+            WHERE {$where_sql}
+            ORDER BY p.created_at DESC, p.local_ledger_code
+        ";
+
+        $rows = $params
+            ? $wpdb->get_results($wpdb->prepare($sql, ...$params), ARRAY_A)
+            : $wpdb->get_results($sql, ARRAY_A);
+
+        return $rows ?: [];
+    }
 }

@@ -40,6 +40,7 @@ class TGS_BCTK_Plugin
     const VIEW_STOCK    = 'bctk-stock';
     const VIEW_LEDGER   = 'bctk-ledger';
     const VIEW_PURCHASE = 'bctk-purchase';
+    const VIEW_CSKH     = 'bctk-cskh';
 
     /** Mọi view của BC_TK — thêm màn mới chỉ cần khai ở đây */
     private static function views()
@@ -48,7 +49,19 @@ class TGS_BCTK_Plugin
             self::VIEW_STOCK  => ['Báo cáo tồn kho', 'Tồn kho', 'bx bx-box', 'stock-report.php'],
             self::VIEW_LEDGER => ['Sổ kho theo mặt hàng', 'Sổ kho (theo mặt hàng)', 'bx bx-book-content', 'stock-ledger.php'],
             self::VIEW_PURCHASE => ['Phân tích mua hàng', 'Phân tích mua hàng', 'bx bx-cart-add', 'stock-purchase.php'],
+            self::VIEW_CSKH   => ['Sổ chăm sóc khách hàng', 'Sổ CSKH', 'bx bx-user-voice', 'cskh-log.php'],
         ];
+    }
+
+    /**
+     * Màn nào thuộc menu BÁN HÀNG thay vì MUA HÀNG.
+     *
+     * Sổ CSKH tra theo khách mua nên thuộc về bán hàng, dù dùng chung khung
+     * BC_TK với mấy báo cáo kho.
+     */
+    private static function sales_views()
+    {
+        return [self::VIEW_CSKH];
     }
 
     public static function init()
@@ -59,28 +72,49 @@ class TGS_BCTK_Plugin
     }
 
     /**
-     * Chèn khối BC_TK vào menu "Mua hàng".
+     * Chèn khối BC_TK vào menu "Mua hàng" và "Bán hàng".
      *
      * Bám theo cấu trúc mà header-mega-nav.php dựng sẵn:
      *   $nav['purchase']['sections'][] = ['heading'=>…, 'icon'=>…, 'items'=>[…]]
      * Chèn thêm section thay vì sửa section có sẵn để không đụng vào menu cũ.
+     *
+     * Chia hai nơi theo nghiệp vụ: báo cáo kho nằm ở Mua hàng, còn sổ tra cứu
+     * theo khách mua nằm ở Bán hàng — dù cả hai dùng chung khung BC_TK.
      */
     public static function add_nav_block($workflow_nav, $current_view = '')
     {
+        $sales = self::sales_views();
+
+        $stock_items = [];
+        $sales_items = [];
+
+        foreach (self::views() as $view => $meta) {
+            $item = ['view' => $view, 'label' => $meta[1], 'icon' => $meta[2]];
+            if (in_array($view, $sales, true)) {
+                $sales_items[] = $item;
+            } else {
+                $stock_items[] = $item;
+            }
+        }
+
+        $block = static function ($items) {
+            return [
+                'key'     => 'bctk',
+                'heading' => 'BC_TK',
+                'icon'    => 'bx bx-bar-chart-square',
+                'items'   => $items,
+            ];
+        };
+
+        if ($sales_items && isset($workflow_nav['sales']['sections'])) {
+            $workflow_nav['sales']['sections'][] = $block($sales_items);
+        }
+
         if (!isset($workflow_nav['purchase']['sections'])) {
             return $workflow_nav;
         }
 
-        $items = [];
-        foreach (self::views() as $view => $meta) {
-            $items[] = ['view' => $view, 'label' => $meta[1], 'icon' => $meta[2]];
-        }
-
-        $workflow_nav['purchase']['sections'][] = [
-            'heading' => 'BC_TK',
-            'icon'    => 'bx bx-bar-chart-square',
-            'items'   => $items,
-        ];
+        $workflow_nav['purchase']['sections'][] = $block($stock_items);
 
         return $workflow_nav;
     }

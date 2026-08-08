@@ -27,7 +27,101 @@ class TGS_BCTK_Ajax
         add_action('wp_ajax_tgs_bctk_fetch_site', [__CLASS__, 'fetch_site']);
         add_action('wp_ajax_tgs_bctk_fetch_ledger', [__CLASS__, 'fetch_ledger']);
         add_action('wp_ajax_tgs_bctk_fetch_purchase', [__CLASS__, 'fetch_purchase']);
+        add_action('wp_ajax_tgs_bctk_fetch_cskh', [__CLASS__, 'fetch_cskh']);
         add_action('wp_ajax_tgs_bctk_refresh_nonce', [__CLASS__, 'refresh_nonce']);
+    }
+
+    /** Sổ chăm sóc khách hàng — mỗi lượt một site, giống các báo cáo khác */
+    public static function fetch_cskh()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền xem báo cáo']);
+        }
+
+        $blog_id = isset($_POST['blog_id']) ? (int) $_POST['blog_id'] : 0;
+        $zones   = isset($_POST['zones']) && is_array($_POST['zones'])
+            ? array_map('sanitize_text_field', wp_unslash($_POST['zones']))
+            : [];
+
+        $today = current_time('Y-m-d');
+        $from  = self::sanitize_date($_POST['date_from'] ?? '', $today);
+        $to    = self::sanitize_date($_POST['date_to'] ?? '', $today);
+
+        if ($blog_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu blog_id']);
+        }
+        if ($from > $to) {
+            list($from, $to) = [$to, $from];
+        }
+
+        try {
+            wp_send_json_success(self::build_cskh_rows($blog_id, $zones, $from, $to));
+        } catch (Exception $e) {
+            wp_send_json_error(['message' => $e->getMessage(), 'blog_id' => $blog_id]);
+        }
+    }
+
+    /**
+     * Dựng dòng sổ CSKH cho một site, kèm cột KHO đã ghép nhãn.
+     *
+     * Cột Kho là điểm hơn hẳn phần mềm cũ: bên đó mỗi lượt chỉ tra được một
+     * shop, nên không cần nói rõ đơn ở đâu. Bên mình quét nhiều chi nhánh cùng
+     * lúc, thiếu cột này thì nhìn một đống đơn mà không biết của shop nào.
+     *
+     * Quy tắc ghép nhãn giống hệt Báo cáo tồn kho, để hai màn đọc lên khớp nhau:
+     *   site kho  → mã phân kho (chưa gán thì lấy tên site và gắn cờ cảnh báo)
+     *   site shop → mã site (không có mã thì lấy tên) — shop không chia phân kho
+     */
+    public static function build_cskh_rows($blog_id, array $zones, $from, $to)
+    {
+        $blog_id = (int) $blog_id;
+
+        $site = null;
+        foreach (TGS_BCTK_Sites::list_sites() as $s) {
+            if ($s['blog_id'] === $blog_id) { $site = $s; break; }
+        }
+        if (!$site) {
+            return ['rows' => [], 'site' => null];
+        }
+
+        $is_warehouse = TGS_BCTK_Sites::is_warehouse($blog_id);
+        $site_label   = $site['code'] !== '' ? $site['code'] : $site['name'];
+
+        $raw = TGS_BCTK_Report::site_cskh_rows($blog_id, $zones, $is_warehouse, $from, $to);
+        if (empty($raw)) {
+            return ['rows' => [], 'site' => $site];
+        }
+
+        $info = TGS_BCTK_Report::product_info(array_column($raw, 'sku'));
+        $rows = [];
+
+        foreach ($raw as $r) {
+            $zone    = (string) $r['zone'];
+            $no_zone = ($is_warehouse && $zone === '');
+            $p       = $info[$r['sku']] ?? [];
+
+            $rows[] = [
+                'blog_id' => $blog_id,
+                'kho'     => $is_warehouse ? ($no_zone ? $site['name'] : $zone) : $site_label,
+                'no_zone' => $no_zone,
+                'pbh'     => (string) $r['pbh'],
+                'ngay'    => (string) $r['ngay_mua'],
+                'sku'     => (string) $r['sku'],
+                'ten'     => (string) ($p['name'] ?? ''),
+                'dvt'     => (string) ($p['unit'] ?? ''),
+                'qty'     => (float) $r['qty'],
+                'kh_ma'   => (string) $r['kh_ma'],
+                'kh_ten'  => (string) $r['kh_ten'],
+                'kh_dt'   => (string) $r['kh_dt'],
+                'kh_dchi' => (string) $r['kh_dchi'],
+                'kh_ns'   => (string) ($r['kh_ns'] ?? ''),
+                'ghi_chu' => (string) $r['ghi_chu'],
+            ];
+        }
+
+        return ['rows' => $rows, 'site' => $site];
     }
 
     /**

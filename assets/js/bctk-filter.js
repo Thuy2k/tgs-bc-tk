@@ -578,12 +578,26 @@
     function recalcFooter() {
         /* Trang tự cộng dòng tổng theo cột riêng của nó */
         if (pageFooter) {
-            var visible = [];
-            $('#bctkBody tr[data-i]').each(function () {
-                if (this.style.display === 'none') return;
-                var r = rows[parseInt(this.getAttribute('data-i'), 10)];
-                if (r) visible.push(r);
-            });
+            var table = document.getElementById('bctkTable');
+            var visible;
+
+            /*
+             * Trang vẽ theo khung nhìn thì HỎI THẲNG mảng đang hiện.
+             *
+             * Duyệt DOM ở đây chỉ thấy vài chục dòng đang lọt màn hình, nên số
+             * dòng sẽ ra kiểu "34 / 199.158 dòng (đang lọc)" trong khi người
+             * dùng chẳng lọc gì — sai mà nhìn rất giống thật.
+             */
+            if (table && table.dsVirtual) {
+                visible = table.dsVirtual.getRows();
+            } else {
+                visible = [];
+                $('#bctkBody tr[data-i]').each(function () {
+                    if (this.style.display === 'none') return;
+                    var r = rows[parseInt(this.getAttribute('data-i'), 10)];
+                    if (r) visible.push(r);
+                });
+            }
 
             pageFooter(visible, rows.length);
             $('#bctkRowCount').text(
