@@ -769,7 +769,10 @@ class TGS_BCTK_Report
                 li.local_product_sku                       AS sku,
                 li.quantity                                AS qty,
                 COALESCE(li.local_ledger_item_warehouse_zone, '') AS zone,
-                COALESCE(li.local_ledger_item_note, '')    AS ghi_chu,
+                /* Ghi chú của PHIẾU BÁN (phiếu cha), không phải của dòng hàng
+                   trên phiếu xuất — đây là chỗ người bán ghi lại chuyện của cả
+                   đơn, còn ghi chú dòng hàng gần như luôn để trống */
+                COALESCE(p.local_ledger_note, '')          AS ghi_chu,
                 COALESCE(pe.local_ledger_person_code, '')  AS kh_ma,
                 COALESCE(pe.local_ledger_person_name, '')  AS kh_ten,
                 COALESCE(pe.local_ledger_person_phone, '') AS kh_dt,

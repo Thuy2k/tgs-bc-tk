@@ -101,6 +101,7 @@ class TGS_BCTK_Ajax
             $zone    = (string) $r['zone'];
             $no_zone = ($is_warehouse && $zone === '');
             $p       = $info[$r['sku']] ?? [];
+            $note    = self::extract_order_note($r['ghi_chu']);
 
             $rows[] = [
                 'blog_id' => $blog_id,
@@ -117,11 +118,46 @@ class TGS_BCTK_Ajax
                 'kh_dt'   => (string) $r['kh_dt'],
                 'kh_dchi' => (string) $r['kh_dchi'],
                 'kh_ns'   => (string) ($r['kh_ns'] ?? ''),
-                'ghi_chu' => (string) $r['ghi_chu'],
+                'ghi_chu' => $note,
             ];
         }
 
         return ['rows' => $rows, 'site' => $site];
+    }
+
+    /**
+     * Bóc lấy chữ người bán thật sự gõ ra khỏi ghi chú phiếu bán.
+     *
+     * POS ghép sẵn tiêu đề vào rồi mới lưu, xem
+     * TGS_POS_Order_Handler::create_sale_ledger:
+     *
+     *     Đơn POS HD3_A7H8C | Ghi chú: mày là của ai
+     *
+     * Mã đơn thì cột PBH đã có rồi; bày lại lần nữa chỉ tổ đẩy phần chữ thật ra
+     * ngoài tầm nhìn, đúng như đang bị.
+     *
+     * Quy tắc bóc giữ y hệt TGS_POS_Ajax_Order::extract_order_note(), kể cả
+     * nhánh phiếu cũ chưa có tiền tố — hai nơi tách khác nhau thì cùng một đơn
+     * lại hiện hai kiểu ghi chú, người dùng không biết tin cái nào.
+     */
+    private static function extract_order_note($raw_note)
+    {
+        $s = trim((string) $raw_note);
+        if ($s === '') {
+            return '';
+        }
+
+        if (preg_match('/\|\s*Ghi chú:\s*(.+)$/us', $s, $mt)) {
+            return trim((string) ($mt[1] ?? ''));
+        }
+
+        /* Phiếu cũ không có tiền tố thì cả chuỗi chính là ghi chú */
+        if (strpos($s, 'Đơn POS ') !== 0) {
+            return $s;
+        }
+
+        /* Chỉ có tiêu đề — người bán không ghi gì */
+        return '';
     }
 
     /**
