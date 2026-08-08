@@ -59,7 +59,7 @@ $bctk_today = current_time('Y-m-d');
                         <th class="c-sku">Số phiếu</th>
                         <th class="c-sku">Lý do</th>
                         <th class="c-num">Số lượng</th>
-                        <th class="c-num">Đơn giá</th>
+                        <th class="c-num" title="Đơn giá theo đơn vị nhỏ nhất (giá 1 lẻ), đã gồm thuế">Đơn giá</th>
                         <th class="c-num">Chiết khấu</th>
                         <th class="c-num">Thành tiền</th>
                         <th class="c-name">Nhân viên</th>
@@ -73,6 +73,7 @@ $bctk_today = current_time('Y-m-d');
                         <th class="c-num">Giá vốn</th>
                         <th class="c-unit">ĐVT</th>
                         <th class="c-num">SL ĐVMR</th>
+                        <th class="c-num" title="Đơn giá theo đơn vị bán trên phiếu (lốc, thùng, vỉ...), đã gồm thuế">Đơn giá ĐVT</th>
                         <th class="c-sku">Hình thức TT</th>
                         <th class="c-sku">Số lô</th>
                         <th class="c-sku">EXPDATE</th>
@@ -82,18 +83,21 @@ $bctk_today = current_time('Y-m-d');
                 </thead>
                 <tbody id="bctkBody">
                     <tr class="bctk-empty">
-                        <td colspan="28">Chọn chi nhánh bên trái, chọn khoảng ngày rồi bấm <strong>Tìm kiếm</strong>.</td>
+                        <td colspan="29">Chọn chi nhánh bên trái, chọn khoảng ngày rồi bấm <strong>Tìm kiếm</strong>.</td>
                     </tr>
                 </tbody>
                 <?php
                 /*
-                 * Tổng số ô ở đây PHẢI bằng đúng 28 — số cột trong <thead>.
+                 * Tổng số ô ở đây PHẢI bằng đúng 29 — số cột trong <thead>.
                  *
                  * Thiếu một ô là mọi con số phía sau chỗ hở bị đẩy sang trái
                  * một cột: tổng "TT trước thuế" nằm dưới "Kênh bán hàng". Số
                  * vẫn đúng nên nhìn lướt không thấy gì sai, chỉ đọc nhầm cột.
                  *
-                 * Cộng cho khớp: 8 + 1 + 1 + 1 + 1 + 7 + 1 + 7 + 1 = 28
+                 * Cộng cho khớp: 8 + 1 + 1 + 1 + 1 + 7 + 1 + 8 + 1 = 29
+                 *
+                 * Hai cột đơn giá KHÔNG cộng tổng: cộng giá lại với nhau ra một
+                 * con số vô nghĩa.
                  */
                 ?>
                 <tfoot id="bctkFoot" class="bctk-hidden">
@@ -105,7 +109,7 @@ $bctk_today = current_time('Y-m-d');
                         <td class="c-num" id="fTien">0</td>
                         <td colspan="7"></td>
                         <td class="c-num" id="fThue">0</td>
-                        <td colspan="7"></td>
+                        <td colspan="8"></td>
                         <td class="c-num" id="fTruocThue">0</td>
                     </tr>
                 </tfoot>
@@ -178,11 +182,12 @@ $bctk_today = current_time('Y-m-d');
                 case 20: return r.gia_von || '';
                 case 21: return r.dvt || '';
                 case 22: return fmt(r.sl_dvmr);
-                case 23: return r.httt || '';
-                case 24: return r.so_lo || '';
-                case 25: return ngay(r.exp);
-                case 26: return r.kenh || '';
-                case 27: return fmt(r.truoc_thue);
+                case 23: return fmt(r.gia_dvt);
+                case 24: return r.httt || '';
+                case 25: return r.so_lo || '';
+                case 26: return ngay(r.exp);
+                case 27: return r.kenh || '';
+                case 28: return fmt(r.truoc_thue);
                 default: return '';
             }
         }
@@ -214,6 +219,7 @@ $bctk_today = current_time('Y-m-d');
                 + '<td class="c-num">' + esc(r.gia_von) + '</td>'
                 + '<td class="c-unit">' + esc(r.dvt) + '</td>'
                 + '<td class="c-num">' + fmt(r.sl_dvmr) + '</td>'
+                + '<td class="c-num">' + fmt(r.gia_dvt) + '</td>'
                 + '<td class="c-sku">' + esc(r.httt) + '</td>'
                 + '<td class="c-sku">' + esc(r.so_lo) + '</td>'
                 + '<td class="c-sku">' + ngay(r.exp) + '</td>'

@@ -22,6 +22,28 @@ class TGS_BCTK_Ajax
 {
     const NONCE = 'tgs_bctk_nonce';
 
+    /**
+     * Nạp lớp tính tiền dùng chung.
+     *
+     * Báo cáo TUYỆT ĐỐI không được tự viết công thức tiền: lệch một chút là số
+     * trên báo cáo khác số đã gửi cơ quan thuế. Luật nằm ở
+     * tgs_shop_management/docs/mo-hinh-tien-va-bang-local-ledger-item.md,
+     * còn TGS_Money thực thi luật đó.
+     */
+    private static function money_ready()
+    {
+        if (class_exists('TGS_Money')) {
+            return true;
+        }
+
+        $file = WP_PLUGIN_DIR . '/tgs_shop_management/functions/class-tgs-money.php';
+        if (file_exists($file)) {
+            require_once $file;
+        }
+
+        return class_exists('TGS_Money');
+    }
+
     public static function init()
     {
         add_action('wp_ajax_tgs_bctk_fetch_site', [__CLASS__, 'fetch_site']);
@@ -231,8 +253,10 @@ class TGS_BCTK_Ajax
             $no_zone   = ($is_warehouse && $zone === '');
             $is_return = ((string) $r['lt'] === '11');
 
-            $tong   = (float) $r['tong_tien'];
-            $da_tra = (float) $r['da_tra'];
+            /* Làm tròn về đồng cho khớp màn Báo cáo bán hàng và bill POS —
+               nhân viên đối chiếu tiền mặt không phải nhìn số lẻ. */
+            $tong   = round((float) $r['tong_tien']);
+            $da_tra = round((float) $r['da_tra']);
 
             $rows[] = [
                 'kho'     => $is_warehouse ? ($no_zone ? $site['name'] : $zone) : $site_label,
@@ -272,6 +296,12 @@ class TGS_BCTK_Ajax
             return ['rows' => [], 'site' => null];
         }
 
+        if (!self::money_ready()) {
+            /* Thà không ra số còn hơn ra số tự chế lệch với bản kê thuế. */
+            return ['rows' => [], 'site' => $site,
+                    'error' => 'Thiếu lớp tính tiền TGS_Money (plugin tgs_shop_management).'];
+        }
+
         $is_warehouse = TGS_BCTK_Sites::is_warehouse($blog_id);
         $site_label   = $site['code'] !== '' ? $site['code'] : $site['name'];
 
@@ -294,7 +324,7 @@ class TGS_BCTK_Ajax
             $is_return = ((string) $r['it'] === '3');
 
             /*
-             * ─── ĐƠN GIÁ SAU THUẾ, THEO ĐƠN VỊ NHỎ NHẤT ─────────────────────
+             * ─── TIỀN CỦA DÒNG: ĐỂ TGS_Money TÍNH, KHÔNG TỰ NHÂN CHIA ───────
              *
              * price ĐÃ tính theo đơn vị nhỏ nhất, KHÔNG phải theo đơn vị bán —
              * nên tuyệt đối không chia cho tỉ lệ quy đổi.
@@ -306,22 +336,72 @@ class TGS_BCTK_Ajax
              *     SL × (giá ÷ tỉ lệ)     khớp  90/107
              *     SL ĐVMR × giá          khớp  89/107
              *
-             * price là giá TRƯỚC thuế, nên nhân thêm thuế suất để ra đơn giá
-             * sau thuế — đó mới là giá khách trả.
+             * ⚠️ CHIẾT KHẤU LƯU TRONG DB LÀ TIỀN TRƯỚC THUẾ. Bản trước của hàm
+             * này lấy nó trừ thẳng vào tiền ĐÃ CÓ THUẾ:
              *
-             *     đơn giá sau thuế = 351.852 × 1,08 = 380.000đ
-             *     thành tiền       = 2 × 380.000    = 760.000đ
-             *     TT trước thuế    = 760.000 − 56.296 = 703.704đ = SL × giá ✅
+             *     sai  : SL × giá_sau_thuế − CK_trước_thuế
+             *     đúng : (SL × giá − CK) × (1 + thuế%)
+             *
+             * Chênh nhau đúng bằng CK × thuế% — mọi dòng có chiết khấu đều bị
+             * cộng dư, và cộng dư ÂM THẦM vì dòng không có CK vẫn ra đúng.
              */
-            $qty        = (float) $r['qty'];
-            $ck         = (float) $r['chiet_khau'];
-            $thue       = (float) $r['thue'];
-            $thue_pct   = (float) $r['thue_pct'];
-            $gia_st     = (float) $r['gia'] * (1 + $thue_pct / 100);
+            $qty      = (float) $r['qty'];
+            $ck       = (float) $r['chiet_khau'];   // trước thuế, cả dòng
+            $thue_pct = (float) $r['thue_pct'];
 
-            /* Trừ chiết khấu vì đó là số tiền THẬT phải trả cho dòng này.
-               Không có chiết khấu thì đúng bằng số lượng × đơn giá. */
-            $thanh_tien = $qty * $gia_st - $ck;
+            $m = TGS_Money::line($qty, (float) $r['gia'], $ck, $thue_pct);
+
+            /*
+             * Tiền thuế lấy SỐ ĐÃ LƯU chứ không lấy số vừa tính: đó mới là con
+             * số đã gửi cơ quan thuế, phải khớp bản kê đã nộp. Hai số này hiện
+             * trùng nhau (đã đối chiếu toàn bộ dữ liệu), nếu sau này lệch thì
+             * báo cáo phải theo bản đã nộp.
+             */
+            $thue = round((float) $r['thue']);
+
+            /*
+             * ─── LÀM TRÒN VỀ ĐỒNG, THEO ĐÚNG CÁCH POS ĐANG LÀM ──────────────
+             *
+             * DB lưu 3 số lẻ để không mất chính xác, nhưng BÁO CÁO thì phải ra
+             * số chẵn: nhân viên đối chiếu tiền mặt hằng ngày, thấy 429.999,67
+             * là tưởng lệch quỹ, trong khi thực thu đúng 430.000.
+             *
+             * Thứ tự làm tròn quan trọng, làm sai là dòng không cộng được:
+             *
+             *   1. Thành tiền  — chốt trước, vì đây là tiền THẬT khách trả
+             *   2. Đơn giá     — làm tròn từ tiền hàng gốc
+             *   3. Chiết khấu  — SUY RA sau cùng = đơn giá × SL − thành tiền
+             *
+             * Nếu làm tròn cả ba độc lập thì lẻ mỗi thứ một ít rồi lệch nhau:
+             * 450.000 × 1 − 20.001 = 429.999, trong khi thành tiền là 430.000.
+             * Dồn phần lẻ vào chiết khấu thì dòng luôn cộng khít — đây đúng là
+             * cách TGS_POS_Ajax_Order dựng số để in bill.
+             */
+            $thanh_tien = round($m['tien_hang_sau_ck'] + $thue);
+
+            /* Tiền hàng GỐC (trước CK, sau thuế) — mốc để suy ra đơn giá */
+            $goc = round($m['tien_hang_truoc_ck'] * (1 + $thue_pct / 100));
+
+            $gia_dvcb = $qty > 0 ? round($goc / $qty) : 0.0;
+
+            /*
+             * Lấy lại tiền gốc THEO ĐƠN GIÁ ĐÃ LÀM TRÒN, để người đọc nhân tay
+             * ra đúng con số trên giấy. Kẹp sàn bằng thành tiền để chiết khấu
+             * không bao giờ âm khi đơn giá bị làm tròn xuống.
+             */
+            $goc      = max($gia_dvcb * $qty, $thanh_tien);
+            $ck_hien  = max(0.0, $goc - $thanh_tien);
+
+            /*
+             * Đơn giá theo ĐƠN VỊ BÁN (lốc, thùng, vỉ...) — chỉ để người đọc
+             * đối chiếu với giá niêm yết trên phiếu, KHÔNG dùng để tính tiền.
+             *
+             * Nhân lên chứ không chia: price trong DB đã theo đơn vị nhỏ nhất
+             * (bẫy 7.2 trong tài liệu). Bán 1 vỉ 4 hộp giá 152.000 thì cột
+             * "Đơn giá" là 38.000/hộp, còn cột này là 152.000/vỉ.
+             */
+            $ratio    = max(1.0, (float) $r['ratio']);
+            $gia_dvt  = round($gia_dvcb * $ratio);
 
             $rows[] = [
                 'kho'      => $is_warehouse ? ($no_zone ? $site['name'] : $zone) : $site_label,
@@ -343,10 +423,16 @@ class TGS_BCTK_Ajax
                 'qty'      => $qty,
                 /* Đơn giá hiện theo ĐVCB để nhân với số lượng ra đúng thành tiền */
                 'gia'      => $gia_dvcb,
-                'ck'       => $ck,
+                /* Đơn giá theo ĐVT bán — chỉ để đối chiếu, không nhân ra tiền */
+                'gia_dvt'  => $gia_dvt,
+                'ck'       => $ck_hien,
                 'tien'     => $thanh_tien,
                 'thue'     => $thue,
-                /* Thanh toán trước thuế = thành tiền trừ phần thuế */
+                /*
+                 * Tiền hàng sau CK, trước thuế — công thức (2) trong tài liệu.
+                 * Lấy hiệu của hai số ĐÃ LÀM TRÒN chứ không làm tròn riêng, để
+                 * cột này cộng với cột Thuế ra đúng cột Thành tiền.
+                 */
                 'truoc_thue' => $thanh_tien - $thue,
                 'gia_von'  => '',   // chưa có nguồn, để trống theo yêu cầu
 
