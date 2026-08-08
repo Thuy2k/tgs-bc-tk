@@ -79,6 +79,7 @@ class TGS_BCTK_Ajax
         add_action('wp_ajax_tgs_bctk_fetch_sales', [__CLASS__, 'fetch_sales']);
         add_action('wp_ajax_tgs_bctk_fetch_sales_sum', [__CLASS__, 'fetch_sales_sum']);
         add_action('wp_ajax_tgs_bctk_fetch_purchase_report', [__CLASS__, 'fetch_purchase_report']);
+        add_action('wp_ajax_tgs_bctk_fetch_purchase_sum', [__CLASS__, 'fetch_purchase_sum']);
         add_action('wp_ajax_tgs_bctk_refresh_nonce', [__CLASS__, 'refresh_nonce']);
     }
 
@@ -378,6 +379,127 @@ class TGS_BCTK_Ajax
                 'sl_dvmr'  => ((float) $r['sl_dvmr']) ?: ($qty / $ratio),
                 'so_lo'    => (string) $r['so_lo'],
                 'exp'      => (string) ($r['exp_date'] ?? ''),
+            ];
+        }
+
+        return ['rows' => $rows, 'site' => $site];
+    }
+
+    /** Tổng hợp mua hàng — gộp theo PHIẾU, mỗi lượt một site */
+    public static function fetch_purchase_sum()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền xem báo cáo']);
+        }
+
+        $blog_id = isset($_POST['blog_id']) ? (int) $_POST['blog_id'] : 0;
+        $zones   = isset($_POST['zones']) && is_array($_POST['zones'])
+            ? array_map('sanitize_text_field', wp_unslash($_POST['zones']))
+            : [];
+
+        $loai = sanitize_text_field(wp_unslash($_POST['loai'] ?? 'buy'));
+        if (!in_array($loai, ['buy', 'return', 'all'], true)) {
+            $loai = 'buy';
+        }
+
+        $today = current_time('Y-m-d');
+        $from  = self::sanitize_date($_POST['date_from'] ?? '', $today);
+        $to    = self::sanitize_date($_POST['date_to'] ?? '', $today);
+
+        if ($blog_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu blog_id']);
+        }
+        if ($from > $to) {
+            list($from, $to) = [$to, $from];
+        }
+
+        try {
+            wp_send_json_success(self::build_purchase_sum_rows($blog_id, $zones, $from, $to, $loai));
+        } catch (Exception $e) {
+            wp_send_json_error(['message' => $e->getMessage(), 'blog_id' => $blog_id]);
+        }
+    }
+
+    /** Ghép nhãn kho, tính còn nợ và trạng thái thanh toán cho từng phiếu */
+    public static function build_purchase_sum_rows($blog_id, array $zones, $from, $to, $loai)
+    {
+        $blog_id = (int) $blog_id;
+
+        $site = null;
+        foreach (TGS_BCTK_Sites::list_sites() as $s) {
+            if ($s['blog_id'] === $blog_id) { $site = $s; break; }
+        }
+        if (!$site) {
+            return ['rows' => [], 'site' => null];
+        }
+
+        $is_warehouse = TGS_BCTK_Sites::is_warehouse($blog_id);
+        $site_label   = $site['code'] !== '' ? $site['code'] : $site['name'];
+        $hom_nay      = current_time('Y-m-d');
+
+        $raw = TGS_BCTK_Report::site_purchase_summary_rows(
+            $blog_id, $zones, $is_warehouse, $from, $to, $loai
+        );
+        if (empty($raw)) {
+            return ['rows' => [], 'site' => $site];
+        }
+
+        $rows = [];
+        foreach ($raw as $r) {
+            $zone      = (string) ($r['zone'] ?? '');
+            $no_zone   = ($is_warehouse && $zone === '');
+            $is_return = ((string) $r['lt'] === '16');
+
+            /* Làm tròn về đồng: màn này để đối chiếu công nợ với nhà cung cấp,
+               không phải để tra giá vốn — khác báo cáo mua hàng chi tiết. */
+            $tong   = round((float) $r['tong_tien']);
+            $da_tra = round((float) $r['da_tra']);
+            $con_no = $tong - $da_tra;
+
+            /*
+             * Trạng thái thanh toán suy từ số còn nợ, không lưu cột riêng —
+             * lưu thì phải cập nhật mỗi lần thu chi, quên một chỗ là sai.
+             */
+            $han_tt = (string) ($r['han_tt'] ?? '');
+            if ($con_no <= 0) {
+                $tt_tt = 'Đã thanh toán';
+            } elseif ($da_tra > 0) {
+                $tt_tt = 'Trả một phần';
+            } elseif ($han_tt !== '' && $han_tt < $hom_nay) {
+                $tt_tt = 'Quá hạn';
+            } else {
+                $tt_tt = 'Chưa thanh toán';
+            }
+
+            $rows[] = [
+                'kho'     => $is_warehouse ? ($no_zone ? $site['name'] : $zone) : $site_label,
+                'no_zone' => $no_zone,
+                'pnk'     => (string) $r['pnk'],
+                'ngay'    => (string) $r['ngay'],
+                'han_tt'  => $han_tt,
+                'so_hd'   => (string) $r['so_hd'],
+                'ly_do'   => $is_return ? 'XTNCC' : ((string) ($r['ly_do_ma'] ?: 'NMH1')),
+                'ly_do_ten' => $is_return ? 'Xuất trả hàng nhà cung cấp'
+                                          : ((string) ($r['ly_do_ten'] ?: '')),
+                'tra_lai' => $is_return,
+                'ncc_ma'  => (string) $r['ncc_ma'],
+                'ncc_ten' => (string) $r['ncc_ten'],
+                'nv_ten'  => (string) $r['nv_ten'],
+                'nv_ma'   => (string) $r['nv_ma'],
+                'tong'    => $tong,
+                /*
+                 * ⚠️ NGƯỢC CHIỀU VỚI BÁN HÀNG: mua là CHI tiền nên cộng vào,
+                 * trả nhà cung cấp là NHẬN lại tiền nên trừ ra.
+                 */
+                'chi_thuan' => $is_return ? -$tong : $tong,
+                'da_tra'  => $da_tra,
+                'con_no'  => $con_no,
+                'tt_tt'   => $tt_tt,
+                /* Quá hạn mà còn nợ thì tô đỏ để nhìn ra ngay */
+                'qua_han' => ($con_no > 0 && $han_tt !== '' && $han_tt < $hom_nay),
+                'ghi_chu' => self::extract_order_note($r['ghi_chu']),
             ];
         }
 

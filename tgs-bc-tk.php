@@ -44,6 +44,7 @@ class TGS_BCTK_Plugin
     const VIEW_SALES    = 'bctk-sales';
     const VIEW_SALESSUM = 'bctk-sales-sum';
     const VIEW_PURREPORT = 'bctk-purchase-report';
+    const VIEW_PURSUM    = 'bctk-purchase-sum';
 
     /** Mọi view của BC_TK — thêm màn mới chỉ cần khai ở đây */
     private static function views()
@@ -53,6 +54,7 @@ class TGS_BCTK_Plugin
             self::VIEW_LEDGER => ['Sổ kho theo mặt hàng', 'Sổ kho (theo mặt hàng)', 'bx bx-book-content', 'stock-ledger.php'],
             self::VIEW_PURCHASE => ['Phân tích mua hàng', 'Phân tích mua hàng', 'bx bx-cart-add', 'stock-purchase.php'],
             self::VIEW_PURREPORT => ['Báo cáo mua hàng / Hàng trả nhà cung cấp', 'Báo cáo mua hàng', 'bx bx-receipt', 'purchase-report.php'],
+            self::VIEW_PURSUM => ['Tổng hợp mua hàng', 'Tổng hợp mua hàng', 'bx bx-list-check', 'purchase-summary.php'],
             self::VIEW_CSKH   => ['Sổ chăm sóc khách hàng', 'Sổ CSKH', 'bx bx-user-voice', 'cskh-log.php'],
             self::VIEW_SALES  => ['Báo cáo bán hàng / Hàng bán trả lại', 'Báo cáo bán hàng', 'bx bx-receipt', 'sales-report.php'],
             self::VIEW_SALESSUM => ['Tổng hợp bán hàng', 'Tổng hợp bán hàng', 'bx bx-list-check', 'sales-summary.php'],

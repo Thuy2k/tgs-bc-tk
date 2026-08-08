@@ -1293,6 +1293,138 @@ class TGS_BCTK_Report
         return $rows ?: [];
     }
 
+    /**
+     * TỔNG HỢP MUA HÀNG — mỗi PHIẾU một dòng, không phải mỗi mặt hàng một dòng.
+     *
+     * Đối xứng với site_sales_summary_rows() nhưng ngược chiều tiền:
+     *
+     *   MUA (type 1)      mình nợ nhà cung cấp → trả bằng PHIẾU CHI (type 8)
+     *   TRẢ NCC (type 16) nhà cung cấp trả lại → nhận bằng PHIẾU THU (type 7)
+     *
+     * Gom cả 7 lẫn 8 để một công thức dùng được cho hai chiều, giống bên bán.
+     * Chỉ cộng phiếu ĐÃ DUYỆT — phiếu chi chờ duyệt mà đã trừ công nợ thì sổ
+     * báo hết nợ trong khi tiền chưa thật sự ra khỏi quỹ.
+     *
+     * Hạn thanh toán lấy từ ô HẠN TT trên màn tạo phiếu nhập kho.
+     *
+     * @param string $loai 'buy' | 'return' | 'all'
+     */
+    public static function site_purchase_summary_rows($blog_id, array $zones, $is_warehouse, $date_from, $date_to, $loai = 'buy')
+    {
+        global $wpdb;
+
+        $prefix         = $wpdb->get_blog_prefix($blog_id);
+        $ledger_table   = $prefix . 'local_ledger';
+        $item_table     = $prefix . 'local_ledger_item';
+        $supplier_table = $wpdb->base_prefix . 'global_supplier';
+
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $ledger_table)) !== $ledger_table) {
+            return [];
+        }
+
+        $A   = self::APPROVER_STATUS_APPROVED;
+        $BUY = 1;
+        $RET = 16;
+
+        if ($loai === 'return') {
+            $type_sql = "d.local_ledger_type = {$RET}";
+        } elseif ($loai === 'all') {
+            $type_sql = "((d.local_ledger_type = {$BUY} AND d.local_ledger_parent_id IS NULL)"
+                      . " OR d.local_ledger_type = {$RET})";
+        } else {
+            $type_sql = "d.local_ledger_type = {$BUY} AND d.local_ledger_parent_id IS NULL";
+        }
+
+        $where = [
+            $type_sql,
+            "d.local_ledger_approver_status = {$A}",
+            "(d.is_deleted = 0 OR d.is_deleted IS NULL)",
+        ];
+
+        $params   = [];
+        $where[]  = 'd.created_at BETWEEN %s AND %s';
+        $params[] = $date_from . ' 00:00:00';
+        $params[] = $date_to   . ' 23:59:59';
+
+        /*
+         * Lọc phân kho ở mức PHIẾU: giữ phiếu nào CÓ ÍT NHẤT MỘT dòng hàng nằm
+         * trong các mã kho đang chọn. Dùng EXISTS chứ không JOIN, vì JOIN sẽ
+         * nhân bản phiếu lên theo số dòng hàng khớp.
+         */
+        if ($is_warehouse && !empty($zones)) {
+            $want_none = in_array(TGS_BCTK_Sites::ZONE_NONE, $zones, true);
+            $real      = array_values(array_filter($zones, static function ($z) {
+                return $z !== TGS_BCTK_Sites::ZONE_NONE;
+            }));
+
+            $parts = [];
+            if (!empty($real)) {
+                $parts[] = 'zi.local_ledger_item_warehouse_zone IN ('
+                         . implode(',', array_fill(0, count($real), '%s')) . ')';
+                $params = array_merge($params, $real);
+            }
+            if ($want_none) {
+                $parts[] = "(zi.local_ledger_item_warehouse_zone IS NULL"
+                         . " OR zi.local_ledger_item_warehouse_zone = '')";
+            }
+            if ($parts) {
+                $where[] = "EXISTS (SELECT 1 FROM {$item_table} zi
+                                     JOIN {$ledger_table} zl ON zl.local_ledger_id = zi.local_ledger_id
+                                    WHERE (zl.local_ledger_id = d.local_ledger_id
+                                           OR zl.local_ledger_parent_id = d.local_ledger_id)
+                                      AND (" . implode(' OR ', $parts) . '))';
+            }
+        }
+
+        $where_sql = implode(' AND ', $where);
+
+        /*
+         * (Chú thích này nằm trong chuỗi PHP mở bằng dấu ngoặc kép: TUYỆT ĐỐI
+         *  không viết dấu ngoặc kép ở đây.)
+         */
+        $sql = "
+            SELECT
+                d.local_ledger_code                        AS pnk,
+                d.local_ledger_type                        AS lt,
+                d.created_at                               AS ngay,
+                d.local_ledger_payment_due_date            AS han_tt,
+                COALESCE(d.local_ledger_code_source, '')   AS so_hd,
+                COALESCE(d.local_ledger_total_amount, 0)   AS tong_tien,
+                COALESCE(u.display_name, '')               AS nv_ten,
+                COALESCE(u.user_login, '')                 AS nv_ma,
+                COALESCE(s.supplier_code, '')              AS ncc_ma,
+                COALESCE(s.supplier_name, '')              AS ncc_ten,
+                COALESCE(d.local_ledger_note, '')          AS ghi_chu,
+                JSON_UNQUOTE(JSON_EXTRACT(d.local_ledger_advance_meta, '$.import_reason.code'))  AS ly_do_ma,
+                JSON_UNQUOTE(JSON_EXTRACT(d.local_ledger_advance_meta, '$.import_reason.label')) AS ly_do_ten,
+
+                /* Một mã kho đại diện, lấy từ dòng hàng của chính phiếu hoặc
+                   phiếu con — phiếu chỉ thuộc về một điểm tồn */
+                (SELECT MIN(NULLIF(zi.local_ledger_item_warehouse_zone, ''))
+                   FROM {$item_table} zi
+                   JOIN {$ledger_table} zl ON zl.local_ledger_id = zi.local_ledger_id
+                  WHERE zl.local_ledger_id = d.local_ledger_id
+                     OR zl.local_ledger_parent_id = d.local_ledger_id) AS zone,
+
+                /* Tiền đã trả: cộng mọi phiếu thu/chi ĐÃ DUYỆT treo dưới phiếu */
+                (SELECT COALESCE(SUM(ch.local_ledger_total_amount), 0)
+                   FROM {$ledger_table} ch
+                  WHERE ch.local_ledger_parent_id = d.local_ledger_id
+                    AND ch.local_ledger_type IN (7, 8)
+                    AND ch.local_ledger_approver_status = {$A}
+                    AND (ch.is_deleted = 0 OR ch.is_deleted IS NULL)) AS da_tra
+            FROM {$ledger_table} d
+            LEFT JOIN {$supplier_table} s ON s.supplier_id = d.supplier_id
+            LEFT JOIN {$wpdb->users}    u ON u.ID = d.user_id
+            WHERE {$where_sql}
+            ORDER BY d.created_at DESC, d.local_ledger_code
+        ";
+
+        $rows = $wpdb->get_results($wpdb->prepare($sql, ...$params), ARRAY_A);
+
+        return $rows ?: [];
+    }
+
     public static function product_group(array $skus)
     {
         global $wpdb;
