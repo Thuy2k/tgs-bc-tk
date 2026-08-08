@@ -912,6 +912,7 @@ class TGS_BCTK_Report
                 COALESCE(u.user_login, '')                 AS nv_ma,
                 COALESCE(pe.local_ledger_person_code, '')  AS kh_ma,
                 COALESCE(pe.local_ledger_person_name, '')  AS kh_ten,
+                COALESCE(pe.local_ledger_person_phone, '') AS kh_dt,
                 COALESCE(pn.local_product_unit, '')        AS dvcb_local,
                 JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label')) AS httt
             FROM {$item_table} li
@@ -923,6 +924,139 @@ class TGS_BCTK_Report
             LEFT JOIN {$wpdb->users}   u ON u.ID = li.user_id
             WHERE {$where_sql}
             ORDER BY p.created_at DESC, p.local_ledger_code
+        ";
+
+        $rows = $wpdb->get_results($wpdb->prepare($sql, ...$params), ARRAY_A);
+
+        return $rows ?: [];
+    }
+
+    /**
+     * TỔNG HỢP BÁN HÀNG — mỗi PHIẾU một dòng, không phải mỗi mặt hàng một dòng.
+     *
+     * Khác hẳn site_sales_rows(): màn kia soi từng dòng hàng, màn này nhìn ở
+     * mức chứng từ để biết phiếu nào đã thu đủ, phiếu nào còn nợ.
+     *
+     * ── SỐ ĐÃ TRẢ LẤY TỪ ĐÂU ────────────────────────────────────────────────
+     *
+     * Tiền thu/chi không nằm trên phiếu bán mà là PHIẾU CON treo dưới nó:
+     *
+     *     phiếu bán (type 10)
+     *        ├── phiếu xuất  (type 2)   — hàng
+     *        ├── phiếu thu   (type 7)   — tiền khách trả   ← cộng vào Số trả
+     *        └── phiếu trả   (type 11)  — hàng khách trả lại
+     *
+     * Phiếu trả thì ngược chiều: cửa hàng trả tiền lại khách nên là phiếu chi
+     * (type 8). Gom cả 7 lẫn 8 để một công thức dùng được cho cả hai chiều.
+     *
+     * Chỉ cộng phiếu ĐÃ DUYỆT — phiếu thu chờ duyệt mà đã trừ vào công nợ thì
+     * sổ báo hết nợ trong khi tiền chưa thật sự vào.
+     *
+     * @param string $loai 'sale' | 'return' | 'all'
+     */
+    public static function site_sales_summary_rows($blog_id, array $zones, $is_warehouse, $date_from, $date_to, $loai = 'sale')
+    {
+        global $wpdb;
+
+        $prefix       = $wpdb->get_blog_prefix($blog_id);
+        $ledger_table = $prefix . 'local_ledger';
+        $item_table   = $prefix . 'local_ledger_item';
+        $person_table = $prefix . 'local_ledger_person';
+        $meta_table   = $prefix . 'local_ledger_meta';
+
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $ledger_table)) !== $ledger_table) {
+            return [];
+        }
+
+        $A = self::APPROVER_STATUS_APPROVED;
+
+        if ($loai === 'return') {
+            $type_sql = 'd.local_ledger_type = 11';
+        } elseif ($loai === 'all') {
+            $type_sql = 'd.local_ledger_type IN (10, 11)';
+        } else {
+            $type_sql = 'd.local_ledger_type = 10';
+        }
+
+        $where = [
+            $type_sql,
+            "d.local_ledger_approver_status = {$A}",
+            "(d.is_deleted = 0 OR d.is_deleted IS NULL)",
+        ];
+
+        $params   = [];
+        $where[]  = 'd.created_at BETWEEN %s AND %s';
+        $params[] = $date_from . ' 00:00:00';
+        $params[] = $date_to   . ' 23:59:59';
+
+        /*
+         * Lọc phân kho ở mức PHIẾU: giữ phiếu nào CÓ ÍT NHẤT MỘT dòng hàng nằm
+         * trong các mã kho đang chọn. Dùng EXISTS chứ không JOIN, vì JOIN sẽ
+         * nhân bản phiếu lên theo số dòng hàng khớp.
+         */
+        if ($is_warehouse && !empty($zones)) {
+            $want_none = in_array(TGS_BCTK_Sites::ZONE_NONE, $zones, true);
+            $real      = array_values(array_filter($zones, static function ($z) {
+                return $z !== TGS_BCTK_Sites::ZONE_NONE;
+            }));
+
+            $parts = [];
+            if (!empty($real)) {
+                $parts[] = 'zi.local_ledger_item_warehouse_zone IN ('
+                         . implode(',', array_fill(0, count($real), '%s')) . ')';
+                $params = array_merge($params, $real);
+            }
+            if ($want_none) {
+                $parts[] = "(zi.local_ledger_item_warehouse_zone IS NULL"
+                         . " OR zi.local_ledger_item_warehouse_zone = '')";
+            }
+            if ($parts) {
+                $where[] = "EXISTS (SELECT 1 FROM {$item_table} zi
+                                     JOIN {$ledger_table} zl ON zl.local_ledger_id = zi.local_ledger_id
+                                    WHERE (zl.local_ledger_id = d.local_ledger_id
+                                           OR zl.local_ledger_parent_id = d.local_ledger_id)
+                                      AND (" . implode(' OR ', $parts) . '))';
+            }
+        }
+
+        $where_sql = implode(' AND ', $where);
+
+        $sql = "
+            SELECT
+                d.local_ledger_code                        AS pbh,
+                d.local_ledger_type                        AS lt,
+                d.created_at                               AS ngay,
+                COALESCE(d.local_ledger_total_amount, 0)   AS tong_tien,
+                d.user_id                                  AS nv_id,
+                COALESCE(u.display_name, '')               AS nv_ten,
+                COALESCE(u.user_login, '')                 AS nv_ma,
+                COALESCE(pe.local_ledger_person_code, '')  AS kh_ma,
+                COALESCE(pe.local_ledger_person_name, '')  AS kh_ten,
+                COALESCE(pe.local_ledger_person_phone, '') AS kh_dt,
+                COALESCE(d.local_ledger_note, '')          AS ghi_chu,
+                JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label')) AS httt,
+
+                /* Một mã kho đại diện, lấy từ dòng hàng của chính phiếu hoặc
+                   phiếu con — phiếu chỉ thuộc về một điểm tồn */
+                (SELECT MIN(NULLIF(zi.local_ledger_item_warehouse_zone, ''))
+                   FROM {$item_table} zi
+                   JOIN {$ledger_table} zl ON zl.local_ledger_id = zi.local_ledger_id
+                  WHERE zl.local_ledger_id = d.local_ledger_id
+                     OR zl.local_ledger_parent_id = d.local_ledger_id) AS zone,
+
+                /* Tiền đã trả: cộng mọi phiếu thu/chi ĐÃ DUYỆT treo dưới phiếu */
+                (SELECT COALESCE(SUM(ch.local_ledger_total_amount), 0)
+                   FROM {$ledger_table} ch
+                  WHERE ch.local_ledger_parent_id = d.local_ledger_id
+                    AND ch.local_ledger_type IN (7, 8)
+                    AND ch.local_ledger_approver_status = {$A}
+                    AND (ch.is_deleted = 0 OR ch.is_deleted IS NULL)) AS da_tra
+            FROM {$ledger_table} d
+            LEFT JOIN {$person_table} pe ON pe.local_ledger_person_id = d.local_ledger_person_id
+            LEFT JOIN {$meta_table}   mt ON mt.local_ledger_meta_id   = d.local_ledger_meta_id
+            LEFT JOIN {$wpdb->users}   u ON u.ID = d.user_id
+            WHERE {$where_sql}
+            ORDER BY d.created_at DESC, d.local_ledger_code
         ";
 
         $rows = $wpdb->get_results($wpdb->prepare($sql, ...$params), ARRAY_A);

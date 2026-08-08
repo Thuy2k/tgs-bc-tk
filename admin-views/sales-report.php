@@ -66,6 +66,7 @@ $bctk_today = current_time('Y-m-d');
                         <th class="c-sku">Mã NV</th>
                         <th class="c-name">Khách hàng</th>
                         <th class="c-sku">Mã KH</th>
+                        <th class="c-sku">SĐT khách</th>
                         <th class="c-name">Ghi chú</th>
                         <th class="c-unit">Trả lại</th>
                         <th class="c-num">Thuế</th>
@@ -81,18 +82,18 @@ $bctk_today = current_time('Y-m-d');
                 </thead>
                 <tbody id="bctkBody">
                     <tr class="bctk-empty">
-                        <td colspan="27">Chọn chi nhánh bên trái, chọn khoảng ngày rồi bấm <strong>Tìm kiếm</strong>.</td>
+                        <td colspan="28">Chọn chi nhánh bên trái, chọn khoảng ngày rồi bấm <strong>Tìm kiếm</strong>.</td>
                     </tr>
                 </tbody>
                 <?php
                 /*
-                 * Tổng số ô ở đây PHẢI bằng đúng 27 — số cột trong <thead>.
+                 * Tổng số ô ở đây PHẢI bằng đúng 28 — số cột trong <thead>.
                  *
                  * Thiếu một ô là mọi con số phía sau chỗ hở bị đẩy sang trái
                  * một cột: tổng "TT trước thuế" nằm dưới "Kênh bán hàng". Số
                  * vẫn đúng nên nhìn lướt không thấy gì sai, chỉ đọc nhầm cột.
                  *
-                 * Cộng cho khớp: 8 + 1 + 1 + 1 + 1 + 6 + 1 + 7 + 1 = 27
+                 * Cộng cho khớp: 8 + 1 + 1 + 1 + 1 + 7 + 1 + 7 + 1 = 28
                  */
                 ?>
                 <tfoot id="bctkFoot" class="bctk-hidden">
@@ -102,7 +103,7 @@ $bctk_today = current_time('Y-m-d');
                         <td></td>
                         <td class="c-num" id="fCk">0</td>
                         <td class="c-num" id="fTien">0</td>
-                        <td colspan="6"></td>
+                        <td colspan="7"></td>
                         <td class="c-num" id="fThue">0</td>
                         <td colspan="7"></td>
                         <td class="c-num" id="fTruocThue">0</td>
@@ -170,17 +171,18 @@ $bctk_today = current_time('Y-m-d');
                 case 13: return r.nv_ma || '';
                 case 14: return r.kh_ten || '';
                 case 15: return r.kh_ma || '';
-                case 16: return r.ghi_chu || '';
-                case 17: return r.tra_lai ? 'x' : '';
-                case 18: return fmt(r.thue);
-                case 19: return r.gia_von || '';
-                case 20: return r.dvt || '';
-                case 21: return fmt(r.sl_dvmr);
-                case 22: return r.httt || '';
-                case 23: return r.so_lo || '';
-                case 24: return ngay(r.exp);
-                case 25: return r.kenh || '';
-                case 26: return fmt(r.truoc_thue);
+                case 16: return r.kh_dt || '';
+                case 17: return r.ghi_chu || '';
+                case 18: return r.tra_lai ? 'x' : '';
+                case 19: return fmt(r.thue);
+                case 20: return r.gia_von || '';
+                case 21: return r.dvt || '';
+                case 22: return fmt(r.sl_dvmr);
+                case 23: return r.httt || '';
+                case 24: return r.so_lo || '';
+                case 25: return ngay(r.exp);
+                case 26: return r.kenh || '';
+                case 27: return fmt(r.truoc_thue);
                 default: return '';
             }
         }
@@ -205,6 +207,7 @@ $bctk_today = current_time('Y-m-d');
                 + '<td class="c-sku">' + esc(r.nv_ma) + '</td>'
                 + '<td class="c-name">' + esc(r.kh_ten) + '</td>'
                 + '<td class="c-sku">' + esc(r.kh_ma) + '</td>'
+                + '<td class="c-sku">' + esc(r.kh_dt) + '</td>'
                 + '<td class="c-name" title="' + esc(r.ghi_chu) + '">' + esc(r.ghi_chu) + '</td>'
                 + '<td class="c-unit">' + (r.tra_lai ? '&#10003;' : '') + '</td>'
                 + '<td class="c-num">' + fmt(r.thue) + '</td>'

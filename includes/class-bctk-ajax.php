@@ -29,6 +29,7 @@ class TGS_BCTK_Ajax
         add_action('wp_ajax_tgs_bctk_fetch_purchase', [__CLASS__, 'fetch_purchase']);
         add_action('wp_ajax_tgs_bctk_fetch_cskh', [__CLASS__, 'fetch_cskh']);
         add_action('wp_ajax_tgs_bctk_fetch_sales', [__CLASS__, 'fetch_sales']);
+        add_action('wp_ajax_tgs_bctk_fetch_sales_sum', [__CLASS__, 'fetch_sales_sum']);
         add_action('wp_ajax_tgs_bctk_refresh_nonce', [__CLASS__, 'refresh_nonce']);
     }
 
@@ -164,6 +165,100 @@ class TGS_BCTK_Ajax
         }
     }
 
+    /** Tổng hợp bán hàng — gộp theo PHIẾU, mỗi lượt một site */
+    public static function fetch_sales_sum()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền xem báo cáo']);
+        }
+
+        $blog_id = isset($_POST['blog_id']) ? (int) $_POST['blog_id'] : 0;
+        $zones   = isset($_POST['zones']) && is_array($_POST['zones'])
+            ? array_map('sanitize_text_field', wp_unslash($_POST['zones']))
+            : [];
+
+        $loai = sanitize_text_field(wp_unslash($_POST['loai'] ?? 'sale'));
+        if (!in_array($loai, ['sale', 'return', 'all'], true)) {
+            $loai = 'sale';
+        }
+
+        $today = current_time('Y-m-d');
+        $from  = self::sanitize_date($_POST['date_from'] ?? '', $today);
+        $to    = self::sanitize_date($_POST['date_to'] ?? '', $today);
+
+        if ($blog_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu blog_id']);
+        }
+        if ($from > $to) {
+            list($from, $to) = [$to, $from];
+        }
+
+        try {
+            wp_send_json_success(self::build_sales_sum_rows($blog_id, $zones, $from, $to, $loai));
+        } catch (Exception $e) {
+            wp_send_json_error(['message' => $e->getMessage(), 'blog_id' => $blog_id]);
+        }
+    }
+
+    /** Ghép nhãn kho và tính số còn nợ cho từng phiếu */
+    public static function build_sales_sum_rows($blog_id, array $zones, $from, $to, $loai)
+    {
+        $blog_id = (int) $blog_id;
+
+        $site = null;
+        foreach (TGS_BCTK_Sites::list_sites() as $s) {
+            if ($s['blog_id'] === $blog_id) { $site = $s; break; }
+        }
+        if (!$site) {
+            return ['rows' => [], 'site' => null];
+        }
+
+        $is_warehouse = TGS_BCTK_Sites::is_warehouse($blog_id);
+        $site_label   = $site['code'] !== '' ? $site['code'] : $site['name'];
+
+        $raw = TGS_BCTK_Report::site_sales_summary_rows(
+            $blog_id, $zones, $is_warehouse, $from, $to, $loai
+        );
+        if (empty($raw)) {
+            return ['rows' => [], 'site' => $site];
+        }
+
+        $rows = [];
+        foreach ($raw as $r) {
+            $zone      = (string) ($r['zone'] ?? '');
+            $no_zone   = ($is_warehouse && $zone === '');
+            $is_return = ((string) $r['lt'] === '11');
+
+            $tong   = (float) $r['tong_tien'];
+            $da_tra = (float) $r['da_tra'];
+
+            $rows[] = [
+                'kho'     => $is_warehouse ? ($no_zone ? $site['name'] : $zone) : $site_label,
+                'no_zone' => $no_zone,
+                'pbh'     => (string) $r['pbh'],
+                'ngay'    => (string) $r['ngay'],
+                'ly_do'   => $is_return ? 'NTH1' : 'XBA',
+                'tra_lai' => $is_return,
+                'kh_ma'   => (string) $r['kh_ma'],
+                'kh_ten'  => (string) $r['kh_ten'],
+                'kh_dt'   => (string) $r['kh_dt'],
+                'nv_ten'  => (string) $r['nv_ten'],
+                'nv_ma'   => (string) $r['nv_ma'],
+                'httt'    => (string) ($r['httt'] ?? ''),
+                'tong'    => $tong,
+                'da_tra'  => $da_tra,
+                /* Còn nợ = tổng tiền phiếu trừ phần đã thu/chi đã duyệt */
+                'con_no'  => $tong - $da_tra,
+                'ghi_chu' => self::extract_order_note($r['ghi_chu']),
+                'kenh'    => 'Gần shop',
+            ];
+        }
+
+        return ['rows' => $rows, 'site' => $site];
+    }
+
     /** Ghép nhãn kho, tên hàng, nhóm hàng và các cột suy ra được */
     public static function build_sales_rows($blog_id, array $zones, $from, $to, $loai)
     {
@@ -259,6 +354,7 @@ class TGS_BCTK_Ajax
                 'nv_ma'    => (string) $r['nv_ma'],
                 'kh_ten'   => (string) $r['kh_ten'],
                 'kh_ma'    => (string) $r['kh_ma'],
+                'kh_dt'    => (string) $r['kh_dt'],
                 'ghi_chu'  => (string) $r['ghi_chu'],
 
                 'dvt'      => (string) $r['dvt_ban'],
