@@ -63,8 +63,8 @@ $bctk_today = current_time('Y-m-d');
                         <th class="c-sku">Số HĐ</th>
                         <th class="c-sku">Lý do</th>
                         <th class="c-num">Số lượng</th>
-                        <th class="c-num" title="Đơn giá nhập theo đơn vị nhỏ nhất, TRƯỚC thuế, trước chiết khấu">ĐG trước thuế</th>
-                        <th class="c-num" title="Đơn giá theo đơn vị nhỏ nhất (giá 1 lẻ), đã gồm thuế">Đơn giá</th>
+                        <th class="c-num" title="Đơn giá trên hoá đơn NCC: trước chiết khấu, TRƯỚC thuế, cho 1 ĐVCB">ĐG gốc (trước thuế)</th>
+                        <th class="c-num" title="Đơn giá trước chiết khấu, SAU thuế, cho 1 ĐVCB = ĐG gốc x (1 + thuế%)">ĐG sau thuế</th>
                         <th class="c-num" title="Tiền hàng trước chiết khấu, trước thuế">TT chưa CK</th>
                         <th class="c-num">Chiết khấu</th>
                         <th class="c-num" title="Tỉ lệ chiết khấu, suy từ tiền chiết khấu">CK(%)</th>
@@ -79,8 +79,8 @@ $bctk_today = current_time('Y-m-d');
                         <th class="c-num">Thuế</th>
                         <th class="c-unit">ĐVT</th>
                         <th class="c-num">SL ĐVMR</th>
-                        <th class="c-num" title="Đơn giá theo đơn vị bán trên phiếu (lốc, thùng, vỉ...), đã gồm thuế">Đơn giá ĐVT</th>
-                        <th class="c-num" title="Đơn giá sau chiết khấu, trước thuế — con số gửi cơ quan thuế">Giá Net</th>
+                        <th class="c-num" title="ĐG sau thuế quy về đơn vị bán trên phiếu (lốc, thùng, vỉ...)">ĐG sau thuế / ĐVT</th>
+                        <th class="c-num" title="Đơn giá SAU chiết khấu, TRƯỚC thuế — con số gửi cơ quan thuế">Giá Net (sau CK)</th>
                         <th class="c-sku">Số lô</th>
                         <th class="c-sku">EXPDATE</th>
                         <th class="c-num">TT trước thuế</th>
