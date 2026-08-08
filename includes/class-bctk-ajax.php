@@ -304,17 +304,30 @@ class TGS_BCTK_Ajax
             $thue_pct = (float) $r['thue_pct'];
 
             $m    = TGS_Money::line($qty, (float) $r['gia'], $ck, $thue_pct);
-            $thue = round((float) $r['thue']);
+            $thue = (float) $r['thue'];
 
-            /* Làm tròn theo đúng thứ tự của báo cáo bán hàng: chốt thành tiền
-               trước, rồi đơn giá, cuối cùng dồn phần lẻ vào chiết khấu */
-            $thanh_tien = round($m['tien_hang_sau_ck'] + $thue);
-            $goc        = round($m['tien_hang_truoc_ck'] * (1 + $thue_pct / 100));
-            $gia_dvcb   = self::don_gia_lam_tron($goc, $qty, $thanh_tien);
-            $ck_hien    = max(0.0, $gia_dvcb * $qty - $thanh_tien);
+            /*
+             * ─── KHÔNG LÀM TRÒN, KHÁC HẲN BÁO CÁO BÁN HÀNG ──────────────────
+             *
+             * Bán hàng làm tròn về đồng vì nhân viên đối chiếu tiền mặt hằng
+             * ngày — thấy số lẻ là tưởng lệch quỹ.
+             *
+             * Mua hàng thì ngược lại: đơn giá nhập suy ra từ tổng tiền hoá đơn
+             * nhà cung cấp nên vốn dĩ có phần lẻ (448.446,3đ/lon). Làm tròn về
+             * đồng rồi nhân với 10.560 đơn vị là sai vài nghìn — mà đây là giá
+             * VỐN, sai giá vốn thì sai lãi gộp của cả kỳ.
+             *
+             * Phần mềm cũ cũng để lẻ đúng như vậy. Không làm tròn thì phép tính
+             * chính xác tuyệt đối, dòng luôn cộng khít, khỏi cần mẹo dồn phần
+             * dư vào chiết khấu như bên bán hàng.
+             */
+            $thanh_tien = $m['tien_hang_sau_ck'] + $thue;
+            $tt_chua_ck = $m['tien_hang_truoc_ck'];
+            $gia_dvcb   = $m['don_gia_sau_thue'];
+            $ck_hien    = $ck * (1 + $thue_pct / 100);
 
             $ratio   = max(1.0, (float) $r['ratio']);
-            $gia_dvt = round($gia_dvcb * $ratio);
+            $gia_dvt = $gia_dvcb * $ratio;
 
             $rows[] = [
                 'kho'      => $is_warehouse ? ($no_zone ? $site['name'] : $zone) : $site_label,
@@ -334,9 +347,14 @@ class TGS_BCTK_Ajax
                 'tra_lai'  => $is_return,
 
                 'qty'      => $qty,
+                /* Đơn giá nhập gốc — trước thuế, trước CK. Đây là con số trên
+                   hoá đơn nhà cung cấp, nên để lẻ đúng như đã lưu. */
+                'gia_truoc_thue' => (float) $r['gia'],
                 'gia'      => $gia_dvcb,
                 'gia_dvt'  => $gia_dvt,
                 'ck'       => $ck_hien,
+                /* Tiền hàng TRƯỚC chiết khấu, trước thuế — cột TT chưa CK */
+                'tt_chua_ck' => $tt_chua_ck,
                 'tien'     => $thanh_tien,
                 /*
                  * ⚠️ NGƯỢC CHIỀU VỚI BÁN HÀNG: mua là CHI tiền nên cộng vào,
@@ -344,9 +362,11 @@ class TGS_BCTK_Ajax
                  */
                 'chi_thuan' => $is_return ? -$thanh_tien : $thanh_tien,
                 'thue'     => $thue,
-                'truoc_thue' => $thanh_tien - $thue,
+                'truoc_thue' => $m['tien_hang_sau_ck'],
                 /* Giá Net = đơn giá gửi cơ quan thuế (sau CK, trước thuế) */
-                'gia_net'  => round($m['don_gia_gui_thue']),
+                'gia_net'  => $m['don_gia_gui_thue'],
+                /* CK% để đối chiếu với phần mềm cũ */
+                'ck_pct'   => $m['ck_phan_tram'],
 
                 'nv_ten'   => (string) $r['nv_ten'],
                 'nv_ma'    => (string) $r['nv_ma'],

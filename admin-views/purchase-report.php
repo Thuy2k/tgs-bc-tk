@@ -63,8 +63,11 @@ $bctk_today = current_time('Y-m-d');
                         <th class="c-sku">Số HĐ</th>
                         <th class="c-sku">Lý do</th>
                         <th class="c-num">Số lượng</th>
+                        <th class="c-num" title="Đơn giá nhập theo đơn vị nhỏ nhất, TRƯỚC thuế, trước chiết khấu">ĐG trước thuế</th>
                         <th class="c-num" title="Đơn giá theo đơn vị nhỏ nhất (giá 1 lẻ), đã gồm thuế">Đơn giá</th>
+                        <th class="c-num" title="Tiền hàng trước chiết khấu, trước thuế">TT chưa CK</th>
                         <th class="c-num">Chiết khấu</th>
+                        <th class="c-num" title="Tỉ lệ chiết khấu, suy từ tiền chiết khấu">CK(%)</th>
                         <th class="c-num">Thành tiền</th>
                         <th class="c-num" title="Chi thuần = tiền mua trừ tiền trả lại NCC. Dòng trả lại hiện số âm.">Chi thuần</th>
                         <th class="c-name">Nhà cung cấp</th>
@@ -85,18 +88,18 @@ $bctk_today = current_time('Y-m-d');
                 </thead>
                 <tbody id="bctkBody">
                     <tr class="bctk-empty">
-                        <td colspan="28">Chọn chi nhánh bên trái, chọn khoảng ngày rồi bấm <strong>Tìm kiếm</strong>.</td>
+                        <td colspan="31">Chọn chi nhánh bên trái, chọn khoảng ngày rồi bấm <strong>Tìm kiếm</strong>.</td>
                     </tr>
                 </tbody>
                 <?php
                 /*
-                 * Tổng số ô ở đây PHẢI bằng đúng 28 — số cột trong <thead>.
+                 * Tổng số ô ở đây PHẢI bằng đúng 31 — số cột trong <thead>.
                  *
                  * Thiếu một ô là mọi con số phía sau chỗ hở bị đẩy sang trái
                  * một cột: số vẫn đúng nên nhìn lướt không thấy gì sai, chỉ
                  * đọc nhầm cột.
                  *
-                 * Cộng cho khớp: 9 + 1 + 1 + 1 + 1 + 1 + 6 + 1 + 6 + 1 = 28
+                 * Cộng cho khớp: 9 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 6 + 1 + 6 + 1 = 31
                  *
                  * Các cột đơn giá KHÔNG cộng tổng: cộng giá lại với nhau ra một
                  * con số vô nghĩa.
@@ -106,8 +109,10 @@ $bctk_today = current_time('Y-m-d');
                     <tr>
                         <td colspan="9">Tổng cộng</td>
                         <td class="c-num" id="fQty">0</td>
-                        <td></td>
+                        <td colspan="2"></td>
+                        <td class="c-num" id="fChuaCk">0</td>
                         <td class="c-num" id="fCk">0</td>
+                        <td></td>
                         <td class="c-num" id="fTien">0</td>
                         <td class="c-num" id="fChiThuan">0</td>
                         <td colspan="6"></td>
@@ -167,24 +172,27 @@ $bctk_today = current_time('Y-m-d');
                 case 7:  return r.so_hd || '';
                 case 8:  return r.ly_do || '';
                 case 9:  return fmt(r.qty);
-                case 10: return fmt(r.gia);
-                case 11: return fmt(r.ck);
-                case 12: return fmt(r.tien);
-                case 13: return fmt(r.chi_thuan);
-                case 14: return r.ncc_ten || '';
-                case 15: return r.ncc_ma || '';
-                case 16: return r.nv_ten || '';
-                case 17: return r.nv_ma || '';
-                case 18: return r.ghi_chu || '';
-                case 19: return r.tra_lai ? 'x' : '';
-                case 20: return fmt(r.thue);
-                case 21: return r.dvt || '';
-                case 22: return fmt(r.sl_dvmr);
-                case 23: return fmt(r.gia_dvt);
-                case 24: return fmt(r.gia_net);
-                case 25: return r.so_lo || '';
-                case 26: return ngay(r.exp);
-                case 27: return fmt(r.truoc_thue);
+                case 10: return fmt(r.gia_truoc_thue);
+                case 11: return fmt(r.gia);
+                case 12: return fmt(r.tt_chua_ck);
+                case 13: return fmt(r.ck);
+                case 14: return fmt(r.ck_pct);
+                case 15: return fmt(r.tien);
+                case 16: return fmt(r.chi_thuan);
+                case 17: return r.ncc_ten || '';
+                case 18: return r.ncc_ma || '';
+                case 19: return r.nv_ten || '';
+                case 20: return r.nv_ma || '';
+                case 21: return r.ghi_chu || '';
+                case 22: return r.tra_lai ? 'x' : '';
+                case 23: return fmt(r.thue);
+                case 24: return r.dvt || '';
+                case 25: return fmt(r.sl_dvmr);
+                case 26: return fmt(r.gia_dvt);
+                case 27: return fmt(r.gia_net);
+                case 28: return r.so_lo || '';
+                case 29: return ngay(r.exp);
+                case 30: return fmt(r.truoc_thue);
                 default: return '';
             }
         }
@@ -203,8 +211,11 @@ $bctk_today = current_time('Y-m-d');
                 + '<td class="c-sku">' + esc(r.so_hd) + '</td>'
                 + '<td class="c-sku" title="' + esc(r.ly_do_ten) + '">' + esc(r.ly_do) + '</td>'
                 + '<td class="c-num">' + fmt(r.qty) + '</td>'
+                + '<td class="c-num">' + fmt(r.gia_truoc_thue) + '</td>'
                 + '<td class="c-num">' + fmt(r.gia) + '</td>'
+                + '<td class="c-num">' + fmt(r.tt_chua_ck) + '</td>'
                 + '<td class="c-num">' + fmt(r.ck) + '</td>'
+                + '<td class="c-num">' + fmt(r.ck_pct) + '</td>'
                 + '<td class="c-num">' + fmt(r.tien) + '</td>'
                 + '<td class="c-num' + (r.chi_thuan < 0 ? ' neg' : '') + '">' + fmt(r.chi_thuan) + '</td>'
                 + '<td class="c-name" title="' + esc(r.ncc_ten) + '">' + esc(r.ncc_ten) + '</td>'
@@ -227,9 +238,10 @@ $bctk_today = current_time('Y-m-d');
         var viewRows = [];
 
         function footer(rows) {
-            var t = { qty: 0, ck: 0, tien: 0, chi: 0, thue: 0, truoc: 0 };
+            var t = { qty: 0, chuack: 0, ck: 0, tien: 0, chi: 0, thue: 0, truoc: 0 };
             rows.forEach(function (r) {
                 t.qty   += (r.qty || 0);
+                t.chuack += (r.tt_chua_ck || 0);
                 t.ck    += (r.ck || 0);
                 t.tien  += (r.tien || 0);
                 t.chi   += (r.chi_thuan || 0);
@@ -237,7 +249,8 @@ $bctk_today = current_time('Y-m-d');
                 t.truoc += (r.truoc_thue || 0);
             });
             $('#fQty').text(fmt(t.qty));
-            $('#fCk').text(fmt(t.ck));
+            $("#fChuaCk").text(fmt(t.chuack));
+            $("#fCk").text(fmt(t.ck));
             $('#fTien').text(fmt(t.tien));
             $('#fChiThuan').text(fmt(t.chi)).toggleClass('neg', t.chi < 0);
             $('#fThue').text(fmt(t.thue));
