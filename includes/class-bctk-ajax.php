@@ -30,6 +30,32 @@ class TGS_BCTK_Ajax
      * tgs_shop_management/docs/mo-hinh-tien-va-bang-local-ledger-item.md,
      * còn TGS_Money thực thi luật đó.
      */
+    /**
+     * Đơn giá làm tròn về đồng, ĐẢM BẢO nhân với số lượng KHÔNG hụt thành tiền.
+     *
+     * Làm tròn xuống rồi nhân lên là dòng không cộng được nữa: 10.560 × giá bị
+     * cắt 0,4đ mỗi đơn vị là hụt 4.000đ cả dòng, mà chiết khấu thì không thể âm
+     * để bù. Số lượng càng lớn càng lệch — màn bán hàng chưa lộ chỉ vì bán lẻ
+     * số lượng nhỏ.
+     *
+     * Nên: làm tròn bình thường, nhưng nếu nhân lên mà hụt thì làm tròn LÊN.
+     * Phần dư luôn rơi vào chiết khấu, dòng cộng khít trong mọi trường hợp.
+     */
+    private static function don_gia_lam_tron($tien_goc, $qty, $thanh_tien)
+    {
+        if ($qty <= 0) {
+            return 0.0;
+        }
+
+        $gia = round($tien_goc / $qty);
+
+        if ($gia * $qty < $thanh_tien) {
+            $gia = ceil($thanh_tien / $qty);
+        }
+
+        return (float) $gia;
+    }
+
     private static function money_ready()
     {
         if (class_exists('TGS_Money')) {
@@ -52,6 +78,7 @@ class TGS_BCTK_Ajax
         add_action('wp_ajax_tgs_bctk_fetch_cskh', [__CLASS__, 'fetch_cskh']);
         add_action('wp_ajax_tgs_bctk_fetch_sales', [__CLASS__, 'fetch_sales']);
         add_action('wp_ajax_tgs_bctk_fetch_sales_sum', [__CLASS__, 'fetch_sales_sum']);
+        add_action('wp_ajax_tgs_bctk_fetch_purchase_report', [__CLASS__, 'fetch_purchase_report']);
         add_action('wp_ajax_tgs_bctk_refresh_nonce', [__CLASS__, 'refresh_nonce']);
     }
 
@@ -188,6 +215,153 @@ class TGS_BCTK_Ajax
         } catch (Exception $e) {
             wp_send_json_error(['message' => $e->getMessage(), 'blog_id' => $blog_id]);
         }
+    }
+
+    /** Báo cáo mua hàng — mỗi lượt một site, giống các báo cáo khác */
+    public static function fetch_purchase_report()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền xem báo cáo']);
+        }
+
+        $blog_id = isset($_POST['blog_id']) ? (int) $_POST['blog_id'] : 0;
+        $zones   = isset($_POST['zones']) && is_array($_POST['zones'])
+            ? array_map('sanitize_text_field', wp_unslash($_POST['zones']))
+            : [];
+
+        $loai = sanitize_text_field(wp_unslash($_POST['loai'] ?? 'buy'));
+        if (!in_array($loai, ['buy', 'return', 'all'], true)) {
+            $loai = 'buy';
+        }
+
+        $today = current_time('Y-m-d');
+        $from  = self::sanitize_date($_POST['date_from'] ?? '', $today);
+        $to    = self::sanitize_date($_POST['date_to'] ?? '', $today);
+
+        if ($blog_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu blog_id']);
+        }
+        if ($from > $to) {
+            list($from, $to) = [$to, $from];
+        }
+
+        try {
+            wp_send_json_success(self::build_purchase_rows($blog_id, $zones, $from, $to, $loai));
+        } catch (Exception $e) {
+            wp_send_json_error(['message' => $e->getMessage(), 'blog_id' => $blog_id]);
+        }
+    }
+
+    /**
+     * Ghép nhãn kho, tên hàng, nhóm hàng cho báo cáo mua hàng.
+     *
+     * Dùng chung cách làm tròn và cách tính tiền với báo cáo bán hàng để hai
+     * màn không bao giờ lệch nhau — xem chú thích trong build_sales_rows().
+     */
+    public static function build_purchase_rows($blog_id, array $zones, $from, $to, $loai)
+    {
+        $blog_id = (int) $blog_id;
+
+        $site = null;
+        foreach (TGS_BCTK_Sites::list_sites() as $s) {
+            if ($s['blog_id'] === $blog_id) { $site = $s; break; }
+        }
+        if (!$site) {
+            return ['rows' => [], 'site' => null];
+        }
+
+        if (!self::money_ready()) {
+            return ['rows' => [], 'site' => $site,
+                    'error' => 'Thiếu lớp tính tiền TGS_Money (plugin tgs_shop_management).'];
+        }
+
+        $is_warehouse = TGS_BCTK_Sites::is_warehouse($blog_id);
+        $site_label   = $site['code'] !== '' ? $site['code'] : $site['name'];
+
+        $raw = TGS_BCTK_Report::site_purchase_rows($blog_id, $zones, $is_warehouse, $from, $to, $loai);
+        if (empty($raw)) {
+            return ['rows' => [], 'site' => $site];
+        }
+
+        $skus  = array_column($raw, 'sku');
+        $info  = TGS_BCTK_Report::product_info($skus);
+        $group = TGS_BCTK_Report::product_group($skus);
+        $rows  = [];
+
+        foreach ($raw as $r) {
+            $zone    = (string) $r['zone'];
+            $no_zone = ($is_warehouse && $zone === '');
+            $p       = $info[$r['sku']] ?? [];
+            $g       = $group[$r['sku']] ?? [];
+
+            /* Dòng xuất (type 2) trong màn này là HÀNG TRẢ LẠI NHÀ CUNG CẤP */
+            $is_return = ((string) $r['it'] === '2');
+
+            $qty      = (float) $r['qty'];
+            $ck       = (float) $r['chiet_khau'];   // trước thuế, cả dòng
+            $thue_pct = (float) $r['thue_pct'];
+
+            $m    = TGS_Money::line($qty, (float) $r['gia'], $ck, $thue_pct);
+            $thue = round((float) $r['thue']);
+
+            /* Làm tròn theo đúng thứ tự của báo cáo bán hàng: chốt thành tiền
+               trước, rồi đơn giá, cuối cùng dồn phần lẻ vào chiết khấu */
+            $thanh_tien = round($m['tien_hang_sau_ck'] + $thue);
+            $goc        = round($m['tien_hang_truoc_ck'] * (1 + $thue_pct / 100));
+            $gia_dvcb   = self::don_gia_lam_tron($goc, $qty, $thanh_tien);
+            $ck_hien    = max(0.0, $gia_dvcb * $qty - $thanh_tien);
+
+            $ratio   = max(1.0, (float) $r['ratio']);
+            $gia_dvt = round($gia_dvcb * $ratio);
+
+            $rows[] = [
+                'kho'      => $is_warehouse ? ($no_zone ? $site['name'] : $zone) : $site_label,
+                'no_zone'  => $no_zone,
+                'sku'      => (string) $r['sku'],
+                'ten'      => (string) ($p['name'] ?? ''),
+                'ngay'     => (string) $r['ngay'],
+                'dvcb'     => (string) ($g['dvcb'] ?: ($p['unit'] ?? $r['dvcb_local'])),
+                'nhom'     => (string) ($g['nhom'] ?? ''),
+
+                'pnk'      => (string) $r['pnk'],
+                'so_hd'    => (string) $r['so_hd'],
+                /* Mã lý do lấy từ phiếu; phiếu trả NCC không có nên gán mã riêng */
+                'ly_do'    => $is_return ? 'XTNCC' : ((string) ($r['ly_do_ma'] ?: 'NMH1')),
+                'ly_do_ten' => $is_return ? 'Xuất trả hàng nhà cung cấp'
+                                          : ((string) ($r['ly_do_ten'] ?: '')),
+                'tra_lai'  => $is_return,
+
+                'qty'      => $qty,
+                'gia'      => $gia_dvcb,
+                'gia_dvt'  => $gia_dvt,
+                'ck'       => $ck_hien,
+                'tien'     => $thanh_tien,
+                /*
+                 * ⚠️ NGƯỢC CHIỀU VỚI BÁN HÀNG: mua là CHI tiền nên cộng vào,
+                 * trả nhà cung cấp là NHẬN lại tiền nên trừ ra.
+                 */
+                'chi_thuan' => $is_return ? -$thanh_tien : $thanh_tien,
+                'thue'     => $thue,
+                'truoc_thue' => $thanh_tien - $thue,
+                /* Giá Net = đơn giá gửi cơ quan thuế (sau CK, trước thuế) */
+                'gia_net'  => round($m['don_gia_gui_thue']),
+
+                'nv_ten'   => (string) $r['nv_ten'],
+                'nv_ma'    => (string) $r['nv_ma'],
+                'ncc_ma'   => (string) $r['ncc_ma'],
+                'ncc_ten'  => (string) $r['ncc_ten'],
+                'ghi_chu'  => (string) $r['ghi_chu'],
+
+                'dvt'      => (string) ($r['dvt_ban'] ?: ($g['dvcb'] ?: ($p['unit'] ?? ''))),
+                'sl_dvmr'  => ((float) $r['sl_dvmr']) ?: ($qty / $ratio),
+                'so_lo'    => (string) $r['so_lo'],
+                'exp'      => (string) ($r['exp_date'] ?? ''),
+            ];
+        }
+
+        return ['rows' => $rows, 'site' => $site];
     }
 
     /** Tổng hợp bán hàng — gộp theo PHIẾU, mỗi lượt một site */
@@ -395,15 +569,13 @@ class TGS_BCTK_Ajax
             /* Tiền hàng GỐC (trước CK, sau thuế) — mốc để suy ra đơn giá */
             $goc = round($m['tien_hang_truoc_ck'] * (1 + $thue_pct / 100));
 
-            $gia_dvcb = $qty > 0 ? round($goc / $qty) : 0.0;
+            $gia_dvcb = self::don_gia_lam_tron($goc, $qty, $thanh_tien);
 
             /*
-             * Lấy lại tiền gốc THEO ĐƠN GIÁ ĐÃ LÀM TRÒN, để người đọc nhân tay
-             * ra đúng con số trên giấy. Kẹp sàn bằng thành tiền để chiết khấu
-             * không bao giờ âm khi đơn giá bị làm tròn xuống.
+             * Chiết khấu là phần dư giữa tiền gốc (theo đơn giá ĐÃ làm tròn) và
+             * thành tiền — nhờ vậy người đọc nhân tay ra đúng con số trên giấy.
              */
-            $goc      = max($gia_dvcb * $qty, $thanh_tien);
-            $ck_hien  = max(0.0, $goc - $thanh_tien);
+            $ck_hien  = max(0.0, $gia_dvcb * $qty - $thanh_tien);
 
             /*
              * Đơn giá theo ĐƠN VỊ BÁN (lốc, thùng, vỉ...) — chỉ để người đọc

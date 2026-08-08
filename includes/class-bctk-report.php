@@ -1149,6 +1149,150 @@ class TGS_BCTK_Report
      * product_info() không trả về đường dẫn nhóm hàng nên phải hỏi riêng, thay
      * vì sửa product_info() — hàm đó đang được ba báo cáo khác dùng chung.
      */
+    /**
+     * BÁO CÁO MUA HÀNG — mỗi mặt hàng một dòng, gồm cả hàng trả nhà cung cấp.
+     *
+     * ── HAI CHIỀU, HAI ĐƯỜNG DẪN KHÁC NHAU ──────────────────────────────────
+     *
+     * Mua và trả NCC không đối xứng như bán và khách trả:
+     *
+     *   MUA      dòng nhập (type 1) nằm THẲNG trên phiếu nhập kho
+     *            phiếu nhập kho: type 1, KHÔNG có cha
+     *
+     *   TRẢ NCC  dòng xuất (type 2) nằm trên PHIẾU XUẤT,
+     *            phiếu xuất mới có cha là phiếu trả NCC (type 16)
+     *            → phải đi thêm một bậc
+     *
+     * Nên phiếu chứng từ của một dòng được chọn bằng: dòng nhập thì lấy chính
+     * phiếu của nó, dòng xuất thì lấy phiếu cha. Gộp lại một phép JOIN thay vì
+     * viết hai câu rồi UNION — đỡ nhân đôi chỗ lọc phân kho.
+     *
+     * ⚠️ CHIỀU TIỀN NGƯỢC VỚI BÁN HÀNG: mua là mình CHI tiền, trả NCC là mình
+     * NHẬN lại tiền. Cột chi thuần vì thế lấy mua trừ trả — xem build_purchase_rows().
+     *
+     * @param string $loai 'buy' | 'return' | 'all'
+     */
+    public static function site_purchase_rows($blog_id, array $zones, $is_warehouse, $date_from, $date_to, $loai = 'buy')
+    {
+        global $wpdb;
+
+        $prefix        = $wpdb->get_blog_prefix($blog_id);
+        $item_table    = $prefix . 'local_ledger_item';
+        $ledger_table  = $prefix . 'local_ledger';
+        $pname_table   = $prefix . 'local_product_name';
+        $supplier_table = $wpdb->base_prefix . 'global_supplier';
+
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $item_table)) !== $item_table) {
+            return [];
+        }
+
+        $A   = self::APPROVER_STATUS_APPROVED;
+        $BUY = 1;    /* phiếu nhập kho */
+        $RET = 16;   /* phiếu trả nhà cung cấp */
+
+        if ($loai === 'return') {
+            $type_sql = 'li.local_ledger_item_type = 2 AND t.local_ledger_type = ' . $RET;
+        } elseif ($loai === 'all') {
+            $type_sql = '((li.local_ledger_item_type = 1 AND t.local_ledger_type = ' . $BUY
+                      . ' AND t.local_ledger_parent_id IS NULL)'
+                      . ' OR (li.local_ledger_item_type = 2 AND t.local_ledger_type = ' . $RET . '))';
+        } else {
+            $type_sql = 'li.local_ledger_item_type = 1 AND t.local_ledger_type = ' . $BUY
+                      . ' AND t.local_ledger_parent_id IS NULL';
+        }
+
+        $where = [
+            $type_sql,
+            "l.local_ledger_approver_status = {$A}",
+            "t.local_ledger_approver_status = {$A}",
+            "(li.is_deleted = 0 OR li.is_deleted IS NULL)",
+            "(l.is_deleted = 0 OR l.is_deleted IS NULL)",
+            "(t.is_deleted = 0 OR t.is_deleted IS NULL)",
+        ];
+
+        $params   = [];
+        $where[]  = 't.created_at BETWEEN %s AND %s';
+        $params[] = $date_from . ' 00:00:00';
+        $params[] = $date_to   . ' 23:59:59';
+
+        if ($is_warehouse && !empty($zones)) {
+            $want_none = in_array(TGS_BCTK_Sites::ZONE_NONE, $zones, true);
+            $real      = array_values(array_filter($zones, static function ($z) {
+                return $z !== TGS_BCTK_Sites::ZONE_NONE;
+            }));
+
+            $parts = [];
+            if (!empty($real)) {
+                $parts[] = 'li.local_ledger_item_warehouse_zone IN ('
+                         . implode(',', array_fill(0, count($real), '%s')) . ')';
+                $params = array_merge($params, $real);
+            }
+            if ($want_none) {
+                $parts[] = "(li.local_ledger_item_warehouse_zone IS NULL"
+                         . " OR li.local_ledger_item_warehouse_zone = '')";
+            }
+            if ($parts) {
+                $where[] = '(' . implode(' OR ', $parts) . ')';
+            }
+        }
+
+        $where_sql = implode(' AND ', $where);
+
+        /*
+         * Lý do nhập nằm ở JSON local_ledger_advance_meta, do màn tạo phiếu ghi
+         * (xem class-tgs-ajax-ticket-base.php). Mặc định là NMH1 - Nhập mua
+         * hàng từ NCC.
+         *
+         * (Chú thích này nằm trong chuỗi PHP mở bằng dấu ngoặc kép: TUYỆT ĐỐI
+         *  không viết dấu ngoặc kép ở đây.)
+         */
+        $sql = "
+            SELECT
+                li.local_ledger_item_type                  AS it,
+                COALESCE(li.local_ledger_item_warehouse_zone, '') AS zone,
+                li.local_product_sku                       AS sku,
+                t.local_ledger_code                        AS pnk,
+                t.created_at                               AS ngay,
+                COALESCE(t.local_ledger_code_source, '')   AS so_hd,
+                li.quantity                                AS qty,
+                /* price: giá TRƯỚC thuế, theo ĐƠN VỊ NHỎ NHẤT — phần cộng thuế
+                   để PHP làm qua TGS_Money, xem build_purchase_rows() */
+                li.price                                   AS gia,
+                COALESCE(li.local_ledger_item_tax_percent, 0)    AS thue_pct,
+                COALESCE(NULLIF(li.local_ledger_item_unit_ratio, 0), 1) AS ratio,
+                COALESCE(li.local_ledger_item_discount_amount, 0) AS chiet_khau,
+                COALESCE(li.local_ledger_item_tax_amount, 0)      AS thue,
+                COALESCE(li.local_ledger_item_unit_name, '')      AS dvt_ban,
+                COALESCE(li.local_ledger_item_unit_quantity, 0)   AS sl_dvmr,
+                COALESCE(li.lot_code, '')                  AS so_lo,
+                li.exp_date                                AS exp_date,
+                COALESCE(li.local_ledger_item_note, '')    AS ghi_chu,
+                COALESCE(u.display_name, '')               AS nv_ten,
+                COALESCE(u.user_login, '')                 AS nv_ma,
+                COALESCE(s.supplier_code, '')              AS ncc_ma,
+                COALESCE(s.supplier_name, '')              AS ncc_ten,
+                COALESCE(pn.local_product_unit, '')        AS dvcb_local,
+                JSON_UNQUOTE(JSON_EXTRACT(t.local_ledger_advance_meta, '$.import_reason.code'))  AS ly_do_ma,
+                JSON_UNQUOTE(JSON_EXTRACT(t.local_ledger_advance_meta, '$.import_reason.label')) AS ly_do_ten
+            FROM {$item_table} li
+            JOIN {$ledger_table} l ON l.local_ledger_id = li.local_ledger_id
+            /* Dòng nhập lấy chính phiếu của nó, dòng xuất phải leo lên phiếu cha */
+            JOIN {$ledger_table} t
+              ON t.local_ledger_id = IF(li.local_ledger_item_type = 1,
+                                        l.local_ledger_id,
+                                        l.local_ledger_parent_id)
+            LEFT JOIN {$supplier_table} s ON s.supplier_id = COALESCE(li.supplier_id, t.supplier_id)
+            LEFT JOIN {$pname_table}   pn ON pn.local_product_name_id = li.local_product_name_id
+            LEFT JOIN {$wpdb->users}    u ON u.ID = li.user_id
+            WHERE {$where_sql}
+            ORDER BY t.created_at DESC, t.local_ledger_code
+        ";
+
+        $rows = $wpdb->get_results($wpdb->prepare($sql, ...$params), ARRAY_A);
+
+        return $rows ?: [];
+    }
+
     public static function product_group(array $skus)
     {
         global $wpdb;
