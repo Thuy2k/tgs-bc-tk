@@ -208,6 +208,16 @@
         if ($('#bctkDateFrom').length) { data.date_from = $('#bctkDateFrom').val(); }
         if ($('#bctkDateTo').length)   { data.date_to   = $('#bctkDateTo').val(); }
 
+        /*
+         * Tham số riêng của từng trang (ví dụ báo cáo bán hàng có ô chọn loại
+         * phiếu). Khai bằng HÀM chứ không phải object tĩnh: giá trị phải đọc
+         * NGAY LÚC GỬI, chứ đọc lúc dựng trang thì mãi mãi là giá trị mặc định.
+         */
+        if (typeof CFG.extraParams === 'function') {
+            var extra = CFG.extraParams() || {};
+            Object.keys(extra).forEach(function (k) { data[k] = extra[k]; });
+        }
+
         /* Nonce hỏng → xin cái mới rồi thử lại ĐÚNG một lần, hỏng nữa thì chịu */
         function retryOrExpire() {
             if (isRetry) {

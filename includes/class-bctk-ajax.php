@@ -28,6 +28,7 @@ class TGS_BCTK_Ajax
         add_action('wp_ajax_tgs_bctk_fetch_ledger', [__CLASS__, 'fetch_ledger']);
         add_action('wp_ajax_tgs_bctk_fetch_purchase', [__CLASS__, 'fetch_purchase']);
         add_action('wp_ajax_tgs_bctk_fetch_cskh', [__CLASS__, 'fetch_cskh']);
+        add_action('wp_ajax_tgs_bctk_fetch_sales', [__CLASS__, 'fetch_sales']);
         add_action('wp_ajax_tgs_bctk_refresh_nonce', [__CLASS__, 'refresh_nonce']);
     }
 
@@ -119,6 +120,153 @@ class TGS_BCTK_Ajax
                 'kh_dchi' => (string) $r['kh_dchi'],
                 'kh_ns'   => (string) ($r['kh_ns'] ?? ''),
                 'ghi_chu' => $note,
+            ];
+        }
+
+        return ['rows' => $rows, 'site' => $site];
+    }
+
+    /** Báo cáo bán hàng / hàng bán trả lại — mỗi lượt một site */
+    public static function fetch_sales()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền xem báo cáo']);
+        }
+
+        $blog_id = isset($_POST['blog_id']) ? (int) $_POST['blog_id'] : 0;
+        $zones   = isset($_POST['zones']) && is_array($_POST['zones'])
+            ? array_map('sanitize_text_field', wp_unslash($_POST['zones']))
+            : [];
+
+        /* Chỉ nhận đúng ba giá trị; giá trị lạ thì về mặc định là phiếu bán */
+        $loai = sanitize_text_field(wp_unslash($_POST['loai'] ?? 'sale'));
+        if (!in_array($loai, ['sale', 'return', 'all'], true)) {
+            $loai = 'sale';
+        }
+
+        $today = current_time('Y-m-d');
+        $from  = self::sanitize_date($_POST['date_from'] ?? '', $today);
+        $to    = self::sanitize_date($_POST['date_to'] ?? '', $today);
+
+        if ($blog_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu blog_id']);
+        }
+        if ($from > $to) {
+            list($from, $to) = [$to, $from];
+        }
+
+        try {
+            wp_send_json_success(self::build_sales_rows($blog_id, $zones, $from, $to, $loai));
+        } catch (Exception $e) {
+            wp_send_json_error(['message' => $e->getMessage(), 'blog_id' => $blog_id]);
+        }
+    }
+
+    /** Ghép nhãn kho, tên hàng, nhóm hàng và các cột suy ra được */
+    public static function build_sales_rows($blog_id, array $zones, $from, $to, $loai)
+    {
+        $blog_id = (int) $blog_id;
+
+        $site = null;
+        foreach (TGS_BCTK_Sites::list_sites() as $s) {
+            if ($s['blog_id'] === $blog_id) { $site = $s; break; }
+        }
+        if (!$site) {
+            return ['rows' => [], 'site' => null];
+        }
+
+        $is_warehouse = TGS_BCTK_Sites::is_warehouse($blog_id);
+        $site_label   = $site['code'] !== '' ? $site['code'] : $site['name'];
+
+        $raw = TGS_BCTK_Report::site_sales_rows($blog_id, $zones, $is_warehouse, $from, $to, $loai);
+        if (empty($raw)) {
+            return ['rows' => [], 'site' => $site];
+        }
+
+        $skus  = array_column($raw, 'sku');
+        $info  = TGS_BCTK_Report::product_info($skus);
+        $group = TGS_BCTK_Report::product_group($skus);
+        $rows  = [];
+
+        foreach ($raw as $r) {
+            $zone    = (string) $r['zone'];
+            $no_zone = ($is_warehouse && $zone === '');
+            $p       = $info[$r['sku']] ?? [];
+            $g       = $group[$r['sku']] ?? [];
+
+            $is_return = ((string) $r['it'] === '3');
+
+            /*
+             * ─── ĐƠN GIÁ SAU THUẾ, THEO ĐƠN VỊ NHỎ NHẤT ─────────────────────
+             *
+             * price ĐÃ tính theo đơn vị nhỏ nhất, KHÔNG phải theo đơn vị bán —
+             * nên tuyệt đối không chia cho tỉ lệ quy đổi.
+             *
+             * Chứng cứ: số thuế đã lưu trên phiếu phải bằng (cơ sở) × thuế%.
+             * Thử ba cơ sở trên 107 dòng có thuế:
+             *
+             *     SL × giá               khớp 105/107   ← đúng
+             *     SL × (giá ÷ tỉ lệ)     khớp  90/107
+             *     SL ĐVMR × giá          khớp  89/107
+             *
+             * price là giá TRƯỚC thuế, nên nhân thêm thuế suất để ra đơn giá
+             * sau thuế — đó mới là giá khách trả.
+             *
+             *     đơn giá sau thuế = 351.852 × 1,08 = 380.000đ
+             *     thành tiền       = 2 × 380.000    = 760.000đ
+             *     TT trước thuế    = 760.000 − 56.296 = 703.704đ = SL × giá ✅
+             */
+            $qty        = (float) $r['qty'];
+            $ck         = (float) $r['chiet_khau'];
+            $thue       = (float) $r['thue'];
+            $thue_pct   = (float) $r['thue_pct'];
+            $gia_st     = (float) $r['gia'] * (1 + $thue_pct / 100);
+
+            /* Trừ chiết khấu vì đó là số tiền THẬT phải trả cho dòng này.
+               Không có chiết khấu thì đúng bằng số lượng × đơn giá. */
+            $thanh_tien = $qty * $gia_st - $ck;
+
+            $rows[] = [
+                'kho'      => $is_warehouse ? ($no_zone ? $site['name'] : $zone) : $site_label,
+                'no_zone'  => $no_zone,
+                'sku'      => (string) $r['sku'],
+                'ten'      => (string) ($p['name'] ?? ''),
+                'ngay'     => (string) $r['ngay'],
+
+                /* ĐVCB = đơn vị nhỏ nhất khai ở sản phẩm global; thiếu thì lấy
+                   đơn vị của bản ghi sản phẩm tại site */
+                'dvcb'     => (string) ($g['dvcb'] ?: ($p['unit'] ?? $r['dvcb_local'])),
+                'nhom'     => (string) ($g['nhom'] ?? ''),
+
+                'pbh'      => (string) $r['pbh'],
+                /* Mã lý do theo phần mềm cũ: bán = XBA, trả lại = NTH1 */
+                'ly_do'    => $is_return ? 'NTH1' : 'XBA',
+                'tra_lai'  => $is_return,
+
+                'qty'      => $qty,
+                /* Đơn giá hiện theo ĐVCB để nhân với số lượng ra đúng thành tiền */
+                'gia'      => $gia_dvcb,
+                'ck'       => $ck,
+                'tien'     => $thanh_tien,
+                'thue'     => $thue,
+                /* Thanh toán trước thuế = thành tiền trừ phần thuế */
+                'truoc_thue' => $thanh_tien - $thue,
+                'gia_von'  => '',   // chưa có nguồn, để trống theo yêu cầu
+
+                'nv_ten'   => (string) $r['nv_ten'],
+                'nv_ma'    => (string) $r['nv_ma'],
+                'kh_ten'   => (string) $r['kh_ten'],
+                'kh_ma'    => (string) $r['kh_ma'],
+                'ghi_chu'  => (string) $r['ghi_chu'],
+
+                'dvt'      => (string) $r['dvt_ban'],
+                'sl_dvmr'  => (float) $r['sl_dvmr'],
+                'httt'     => (string) ($r['httt'] ?? ''),
+                'so_lo'    => (string) $r['so_lo'],
+                'exp'      => (string) ($r['exp_date'] ?? ''),
+                'kenh'     => 'Gần shop',
             ];
         }
 

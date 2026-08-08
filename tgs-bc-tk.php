@@ -41,6 +41,7 @@ class TGS_BCTK_Plugin
     const VIEW_LEDGER   = 'bctk-ledger';
     const VIEW_PURCHASE = 'bctk-purchase';
     const VIEW_CSKH     = 'bctk-cskh';
+    const VIEW_SALES    = 'bctk-sales';
 
     /** Mọi view của BC_TK — thêm màn mới chỉ cần khai ở đây */
     private static function views()
@@ -50,6 +51,7 @@ class TGS_BCTK_Plugin
             self::VIEW_LEDGER => ['Sổ kho theo mặt hàng', 'Sổ kho (theo mặt hàng)', 'bx bx-book-content', 'stock-ledger.php'],
             self::VIEW_PURCHASE => ['Phân tích mua hàng', 'Phân tích mua hàng', 'bx bx-cart-add', 'stock-purchase.php'],
             self::VIEW_CSKH   => ['Sổ chăm sóc khách hàng', 'Sổ CSKH', 'bx bx-user-voice', 'cskh-log.php'],
+            self::VIEW_SALES  => ['Báo cáo bán hàng / Hàng bán trả lại', 'Báo cáo bán hàng', 'bx bx-receipt', 'sales-report.php'],
         ];
     }
 
@@ -61,7 +63,7 @@ class TGS_BCTK_Plugin
      */
     private static function sales_views()
     {
-        return [self::VIEW_CSKH];
+        return [self::VIEW_CSKH, self::VIEW_SALES];
     }
 
     public static function init()
