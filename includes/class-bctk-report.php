@@ -1397,6 +1397,9 @@ class TGS_BCTK_Report
                 COALESCE(d.local_ledger_note, '')          AS ghi_chu,
                 JSON_UNQUOTE(JSON_EXTRACT(d.local_ledger_advance_meta, '$.import_reason.code'))  AS ly_do_ma,
                 JSON_UNQUOTE(JSON_EXTRACT(d.local_ledger_advance_meta, '$.import_reason.label')) AS ly_do_ten,
+                /* Ký hiệu + ngày hoá đơn nằm trong JSON chứng từ, không có cột riêng */
+                JSON_UNQUOTE(JSON_EXTRACT(d.local_ledger_advance_meta, '$.invoice.symbol')) AS hd_ky_hieu,
+                JSON_UNQUOTE(JSON_EXTRACT(d.local_ledger_advance_meta, '$.invoice.date'))   AS hd_ngay,
 
                 /* Một mã kho đại diện, lấy từ dòng hàng của chính phiếu hoặc
                    phiếu con — phiếu chỉ thuộc về một điểm tồn */

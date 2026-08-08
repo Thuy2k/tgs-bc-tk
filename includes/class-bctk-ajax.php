@@ -480,6 +480,8 @@ class TGS_BCTK_Ajax
                 'ngay'    => (string) $r['ngay'],
                 'han_tt'  => $han_tt,
                 'so_hd'   => (string) $r['so_hd'],
+                'hd_ky_hieu' => (string) ($r['hd_ky_hieu'] ?? ''),
+                'hd_ngay' => (string) ($r['hd_ngay'] ?? ''),
                 'ly_do'   => $is_return ? 'XTNCC' : ((string) ($r['ly_do_ma'] ?: 'NMH1')),
                 'ly_do_ten' => $is_return ? 'Xuất trả hàng nhà cung cấp'
                                           : ((string) ($r['ly_do_ten'] ?: '')),

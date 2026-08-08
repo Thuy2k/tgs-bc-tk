@@ -62,6 +62,8 @@ $bctk_today = current_time('Y-m-d');
                         <th class="c-sku">Mã NCC</th>
                         <th class="c-name">Tên NCC</th>
                         <th class="c-sku">Số HĐ</th>
+                        <th class="c-sku" title="Ký hiệu hoá đơn — số HĐ một mình không định danh đủ">Ký hiệu HĐ</th>
+                        <th class="c-sku">Ngày HĐ</th>
                         <th class="c-name">Nhân viên</th>
                         <th class="c-sku">Mã NV</th>
                         <th class="c-num" title="Tổng tiền phiếu — số phải trả nhà cung cấp">Tổng nợ</th>
@@ -75,13 +77,13 @@ $bctk_today = current_time('Y-m-d');
                 </thead>
                 <tbody id="bctkBody">
                     <tr class="bctk-empty">
-                        <td colspan="17">Chọn chi nhánh bên trái, chọn khoảng ngày rồi bấm <strong>Tìm kiếm</strong>.</td>
+                        <td colspan="19">Chọn chi nhánh bên trái, chọn khoảng ngày rồi bấm <strong>Tìm kiếm</strong>.</td>
                     </tr>
                 </tbody>
-                <?php /* 10 + 1 + 1 + 1 + 1 + 3 = 17, khớp đúng số cột ở <thead> */ ?>
+                <?php /* 12 + 1 + 1 + 1 + 1 + 3 = 19, khớp đúng số cột ở <thead> */ ?>
                 <tfoot id="bctkFoot" class="bctk-hidden">
                     <tr>
-                        <td colspan="10">Tổng cộng</td>
+                        <td colspan="12">Tổng cộng</td>
                         <td class="c-num" id="fTong">0</td>
                         <td class="c-num" id="fChiThuan">0</td>
                         <td class="c-num" id="fTra">0</td>
@@ -135,15 +137,17 @@ $bctk_today = current_time('Y-m-d');
                 case 5:  return r.ncc_ma || '';
                 case 6:  return r.ncc_ten || '';
                 case 7:  return r.so_hd || '';
-                case 8:  return r.nv_ten || '';
-                case 9:  return r.nv_ma || '';
-                case 10: return fmt(r.tong);
-                case 11: return fmt(r.chi_thuan);
-                case 12: return fmt(r.da_tra);
-                case 13: return fmt(r.con_no);
-                case 14: return r.tt_tt || '';
-                case 15: return r.tra_lai ? 'x' : '';
-                case 16: return r.ghi_chu || '';
+                case 8:  return r.hd_ky_hieu || '';
+                case 9:  return ngay(r.hd_ngay);
+                case 10: return r.nv_ten || '';
+                case 11: return r.nv_ma || '';
+                case 12: return fmt(r.tong);
+                case 13: return fmt(r.chi_thuan);
+                case 14: return fmt(r.da_tra);
+                case 15: return fmt(r.con_no);
+                case 16: return r.tt_tt || '';
+                case 17: return r.tra_lai ? 'x' : '';
+                case 18: return r.ghi_chu || '';
                 default: return '';
             }
         }
@@ -163,6 +167,8 @@ $bctk_today = current_time('Y-m-d');
                 + '<td class="c-sku">' + esc(r.ncc_ma) + '</td>'
                 + '<td class="c-name" title="' + esc(r.ncc_ten) + '">' + esc(r.ncc_ten) + '</td>'
                 + '<td class="c-sku">' + esc(r.so_hd) + '</td>'
+                + '<td class="c-sku">' + esc(r.hd_ky_hieu) + '</td>'
+                + '<td class="c-sku">' + ngay(r.hd_ngay) + '</td>'
                 + '<td class="c-name">' + esc(r.nv_ten) + '</td>'
                 + '<td class="c-sku">' + esc(r.nv_ma) + '</td>'
                 + '<td class="c-num">' + fmt(r.tong) + '</td>'
