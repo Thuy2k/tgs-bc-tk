@@ -119,6 +119,9 @@ class TGS_BCTK_Ajax
         }
 
         $info = TGS_BCTK_Report::product_info(array_column($raw, 'sku'));
+        /* Cột SL là số lượng theo đơn vị nhỏ nhất, nên ĐVT đi kèm phải là đơn
+           vị nhỏ nhất THẬT — lấy từ bảng quy đổi, không tin global_product_unit */
+        $base = TGS_BCTK_Report::base_unit(array_column($raw, 'sku'));
         $rows = [];
 
         foreach ($raw as $r) {
@@ -135,7 +138,7 @@ class TGS_BCTK_Ajax
                 'ngay'    => (string) $r['ngay_mua'],
                 'sku'     => (string) $r['sku'],
                 'ten'     => (string) ($p['name'] ?? ''),
-                'dvt'     => (string) ($p['unit'] ?? ''),
+                'dvt'     => (string) ($base[$r['sku']] ?? ($p['unit'] ?? '')),
                 'qty'     => (float) $r['qty'],
                 'kh_ma'   => (string) $r['kh_ma'],
                 'kh_ten'  => (string) $r['kh_ten'],
@@ -322,6 +325,7 @@ class TGS_BCTK_Ajax
         $skus  = array_column($raw, 'sku');
         $info  = TGS_BCTK_Report::product_info($skus);
         $group = TGS_BCTK_Report::product_group($skus);
+        $base  = TGS_BCTK_Report::base_unit($skus);
         $rows  = [];
 
         foreach ($raw as $r) {
@@ -419,9 +423,13 @@ class TGS_BCTK_Ajax
                 'ten'      => (string) ($p['name'] ?? ''),
                 'ngay'     => (string) $r['ngay'],
 
-                /* ĐVCB = đơn vị nhỏ nhất khai ở sản phẩm global; thiếu thì lấy
-                   đơn vị của bản ghi sản phẩm tại site */
-                'dvcb'     => (string) ($g['dvcb'] ?: ($p['unit'] ?? $r['dvcb_local'])),
+                /*
+                 * ĐVCB ưu tiên BẢNG QUY ĐỔI (dòng tỉ lệ = 1) vì global_product_unit
+                 * khai sai ở nhiều mã — có mã ghi luôn Vi_4 làm đơn vị nhỏ nhất
+                 * trong khi nhỏ nhất là Hộp. Xem TGS_BCTK_Report::base_unit().
+                 */
+                'dvcb'     => (string) ($base[$r['sku']]
+                              ?: ($g['dvcb'] ?: ($p['unit'] ?? $r['dvcb_local']))),
                 'nhom'     => (string) ($g['nhom'] ?? ''),
 
                 'pbh'      => (string) $r['pbh'],
@@ -455,8 +463,22 @@ class TGS_BCTK_Ajax
                 'kh_dt'    => (string) $r['kh_dt'],
                 'ghi_chu'  => (string) $r['ghi_chu'],
 
-                'dvt'      => (string) $r['dvt_ban'],
-                'sl_dvmr'  => (float) $r['sl_dvmr'],
+                /*
+                 * Dòng cũ (hàng tặng, phiếu hoàn trước bản vá) không ghi đơn vị
+                 * bán. Tỉ lệ quy đổi của chúng bằng 1 nên lùi về ĐVCB là đúng,
+                 * hơn hẳn để trống làm người đọc tưởng thiếu dữ liệu.
+                 */
+                'dvt'      => (string) ($r['dvt_ban'] ?: ($base[$r['sku']]
+                              ?: ($g['dvcb'] ?: ($p['unit'] ?? '')))),
+                /*
+                 * Dòng cũ bỏ trống SL theo ĐVMR thì suy từ số lượng và tỉ lệ,
+                 * thay vì hiện số 0 làm người đọc tưởng không bán được gì.
+                 *
+                 * ⚠️ Phải ép (float) TRƯỚC khi so: MySQL trả về chuỗi "0.000",
+                 * mà chuỗi đó PHP coi là CÓ giá trị nên `?:` không hề nhảy sang
+                 * nhánh dự phòng. Chỉ "0" và "" mới là rỗng.
+                 */
+                'sl_dvmr'  => ((float) $r['sl_dvmr']) ?: ($qty / $ratio),
                 'httt'     => (string) ($r['httt'] ?? ''),
                 'so_lo'    => (string) $r['so_lo'],
                 'exp'      => (string) ($r['exp_date'] ?? ''),

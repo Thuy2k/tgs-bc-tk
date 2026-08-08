@@ -768,13 +768,6 @@ class TGS_BCTK_Report
                 p.created_at                               AS ngay_mua,
                 li.local_product_sku                       AS sku,
                 li.quantity                                AS qty,
-                /*
-                 * Số lượng và đơn vị theo ĐÚNG CÁCH BÁN trên phiếu.
-                 * quantity ở trên là theo đơn vị nhỏ nhất, ghép với tên đơn vị
-                 * bán sẽ ra sai (4 kèm Vi_4 đọc thành 4 vỉ = 16 hộp).
-                 */
-                COALESCE(li.local_ledger_item_unit_quantity, 0) AS sl_dvmr,
-                COALESCE(li.local_ledger_item_unit_name, '')    AS dvt_ban,
                 COALESCE(li.local_ledger_item_warehouse_zone, '') AS zone,
                 /* Ghi chú của PHIẾU BÁN (phiếu cha), không phải của dòng hàng
                    trên phiếu xuất — đây là chỗ người bán ghi lại chuyện của cả
@@ -1069,6 +1062,85 @@ class TGS_BCTK_Report
         $rows = $wpdb->get_results($wpdb->prepare($sql, ...$params), ARRAY_A);
 
         return $rows ?: [];
+    }
+
+    /**
+     * ĐƠN VỊ NHỎ NHẤT thật sự của từng SKU, lấy từ bảng cấu hình quy đổi.
+     *
+     * ── VÌ SAO KHÔNG DÙNG global_product_unit ───────────────────────────────
+     *
+     * Cột đó khai sai ở nhiều mã. Ví dụ có thật, SKU 140781007
+     * (Sữa chua hoa quả Hoff): `global_product_unit` ghi **Vỉ_4**, trong khi
+     * bảng quy đổi khai rõ **Hộp ×1** (nhỏ nhất) và **Vỉ_4 ×4**.
+     *
+     * Hậu quả: báo cáo hiện "SL 4 — ĐVT Vỉ_4", người đọc hiểu thành 4 vỉ =
+     * 16 hộp, trong khi thực bán 1 vỉ = 4 hộp. Số lượng `quantity` LUÔN theo
+     * đơn vị nhỏ nhất, nên tên đơn vị đi kèm cũng phải là đơn vị nhỏ nhất.
+     *
+     * Đơn vị nhỏ nhất = dòng có tỉ lệ quy đổi bằng 1. Mã nào chưa cấu hình thì
+     * không có trong kết quả, chỗ gọi tự lùi về `global_product_unit`.
+     *
+     * ── KHI CÓ NHIỀU DÒNG TỈ LỆ 1 ───────────────────────────────────────────
+     *
+     * Bảng quy đổi cũng có chỗ khai ẩu: SKU 161369004 có HAI dòng tỉ lệ 1 là
+     * `Gói` và `Lốc_3` (lốc 3 mà tỉ lệ 1 thì rõ ràng nhập nhầm). Hiện có 8 mã
+     * như vậy. Không chọn bừa dòng nào MySQL trả trước, vì mỗi lần chạy có thể
+     * ra một kết quả khác nhau.
+     *
+     * Quy tắc chọn:
+     *   1. Dòng nào TRÙNG với `global_product_unit` thì lấy — hai nguồn cùng
+     *      nói một thứ là đáng tin nhất
+     *   2. Không trùng thì lấy dòng cấu hình SỚM NHẤT, để kết quả cố định
+     *
+     * @return array sku => tên đơn vị nhỏ nhất
+     */
+    public static function base_unit(array $skus)
+    {
+        global $wpdb;
+
+        $skus = array_values(array_unique(array_filter($skus)));
+        if (empty($skus)) {
+            return [];
+        }
+
+        $table   = $wpdb->base_prefix . 'global_htsoft_stock_convert';
+        $product = $wpdb->base_prefix . 'global_product_name';
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table)) !== $table) {
+            return [];
+        }
+
+        $ph = implode(',', array_fill(0, count($skus), '%s'));
+
+        /*
+         * Hai bảng khác collation nên phải CONVERT trước khi so, không thì
+         * MySQL báo "Illegal mix of collations" và cả báo cáo tắt tiếng.
+         */
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT c.global_product_sku AS sku, c.convert_unit AS dvcb
+               FROM {$table} c
+               LEFT JOIN {$product} p
+                      ON p.global_product_sku = c.global_product_sku
+              WHERE c.global_product_sku IN ({$ph})
+                AND c.convert_to_htsoft = 1
+                AND c.convert_unit <> ''
+                AND (c.is_deleted = 0 OR c.is_deleted IS NULL)
+              ORDER BY
+                CASE WHEN CONVERT(c.convert_unit USING utf8mb4)
+                          COLLATE utf8mb4_unicode_520_ci = p.global_product_unit
+                     THEN 0 ELSE 1 END,
+                c.global_htsoft_stock_convert_id",
+            ...$skus
+        ), ARRAY_A) ?: [];
+
+        $map = [];
+        foreach ($rows as $r) {
+            /* Đã sắp xếp theo thứ tự ưu tiên nên dòng ĐẦU của mỗi mã là dòng cần */
+            if (!isset($map[(string) $r['sku']])) {
+                $map[(string) $r['sku']] = (string) $r['dvcb'];
+            }
+        }
+
+        return $map;
     }
 
     /**
