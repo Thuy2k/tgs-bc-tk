@@ -768,6 +768,13 @@ class TGS_BCTK_Report
                 p.created_at                               AS ngay_mua,
                 li.local_product_sku                       AS sku,
                 li.quantity                                AS qty,
+                /*
+                 * Số lượng và đơn vị theo ĐÚNG CÁCH BÁN trên phiếu.
+                 * quantity ở trên là theo đơn vị nhỏ nhất, ghép với tên đơn vị
+                 * bán sẽ ra sai (4 kèm Vi_4 đọc thành 4 vỉ = 16 hộp).
+                 */
+                COALESCE(li.local_ledger_item_unit_quantity, 0) AS sl_dvmr,
+                COALESCE(li.local_ledger_item_unit_name, '')    AS dvt_ban,
                 COALESCE(li.local_ledger_item_warehouse_zone, '') AS zone,
                 /* Ghi chú của PHIẾU BÁN (phiếu cha), không phải của dòng hàng
                    trên phiếu xuất — đây là chỗ người bán ghi lại chuyện của cả

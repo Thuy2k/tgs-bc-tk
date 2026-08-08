@@ -62,6 +62,7 @@ $bctk_today = current_time('Y-m-d');
                         <th class="c-num" title="Đơn giá theo đơn vị nhỏ nhất (giá 1 lẻ), đã gồm thuế">Đơn giá</th>
                         <th class="c-num">Chiết khấu</th>
                         <th class="c-num">Thành tiền</th>
+                        <th class="c-num" title="Doanh thu thuần = tiền bán trừ tiền trả lại. Dòng trả lại hiện số âm.">Doanh thu thuần</th>
                         <th class="c-name">Nhân viên</th>
                         <th class="c-sku">Mã NV</th>
                         <th class="c-name">Khách hàng</th>
@@ -83,18 +84,18 @@ $bctk_today = current_time('Y-m-d');
                 </thead>
                 <tbody id="bctkBody">
                     <tr class="bctk-empty">
-                        <td colspan="29">Chọn chi nhánh bên trái, chọn khoảng ngày rồi bấm <strong>Tìm kiếm</strong>.</td>
+                        <td colspan="30">Chọn chi nhánh bên trái, chọn khoảng ngày rồi bấm <strong>Tìm kiếm</strong>.</td>
                     </tr>
                 </tbody>
                 <?php
                 /*
-                 * Tổng số ô ở đây PHẢI bằng đúng 29 — số cột trong <thead>.
+                 * Tổng số ô ở đây PHẢI bằng đúng 30 — số cột trong <thead>.
                  *
                  * Thiếu một ô là mọi con số phía sau chỗ hở bị đẩy sang trái
                  * một cột: tổng "TT trước thuế" nằm dưới "Kênh bán hàng". Số
                  * vẫn đúng nên nhìn lướt không thấy gì sai, chỉ đọc nhầm cột.
                  *
-                 * Cộng cho khớp: 8 + 1 + 1 + 1 + 1 + 7 + 1 + 8 + 1 = 29
+                 * Cộng cho khớp: 8 + 1 + 1 + 1 + 1 + 1 + 7 + 1 + 8 + 1 = 30
                  *
                  * Hai cột đơn giá KHÔNG cộng tổng: cộng giá lại với nhau ra một
                  * con số vô nghĩa.
@@ -107,6 +108,7 @@ $bctk_today = current_time('Y-m-d');
                         <td></td>
                         <td class="c-num" id="fCk">0</td>
                         <td class="c-num" id="fTien">0</td>
+                        <td class="c-num" id="fDoanhThu">0</td>
                         <td colspan="7"></td>
                         <td class="c-num" id="fThue">0</td>
                         <td colspan="8"></td>
@@ -171,23 +173,24 @@ $bctk_today = current_time('Y-m-d');
                 case 9:  return fmt(r.gia);
                 case 10: return fmt(r.ck);
                 case 11: return fmt(r.tien);
-                case 12: return r.nv_ten || '';
-                case 13: return r.nv_ma || '';
-                case 14: return r.kh_ten || '';
-                case 15: return r.kh_ma || '';
-                case 16: return r.kh_dt || '';
-                case 17: return r.ghi_chu || '';
-                case 18: return r.tra_lai ? 'x' : '';
-                case 19: return fmt(r.thue);
-                case 20: return r.gia_von || '';
-                case 21: return r.dvt || '';
-                case 22: return fmt(r.sl_dvmr);
-                case 23: return fmt(r.gia_dvt);
-                case 24: return r.httt || '';
-                case 25: return r.so_lo || '';
-                case 26: return ngay(r.exp);
-                case 27: return r.kenh || '';
-                case 28: return fmt(r.truoc_thue);
+                case 12: return fmt(r.doanh_thu);
+                case 13: return r.nv_ten || '';
+                case 14: return r.nv_ma || '';
+                case 15: return r.kh_ten || '';
+                case 16: return r.kh_ma || '';
+                case 17: return r.kh_dt || '';
+                case 18: return r.ghi_chu || '';
+                case 19: return r.tra_lai ? 'x' : '';
+                case 20: return fmt(r.thue);
+                case 21: return r.gia_von || '';
+                case 22: return r.dvt || '';
+                case 23: return fmt(r.sl_dvmr);
+                case 24: return fmt(r.gia_dvt);
+                case 25: return r.httt || '';
+                case 26: return r.so_lo || '';
+                case 27: return ngay(r.exp);
+                case 28: return r.kenh || '';
+                case 29: return fmt(r.truoc_thue);
                 default: return '';
             }
         }
@@ -208,6 +211,7 @@ $bctk_today = current_time('Y-m-d');
                 + '<td class="c-num">' + fmt(r.gia) + '</td>'
                 + '<td class="c-num">' + fmt(r.ck) + '</td>'
                 + '<td class="c-num">' + fmt(r.tien) + '</td>'
+                + '<td class="c-num' + (r.doanh_thu < 0 ? ' neg' : '') + '">' + fmt(r.doanh_thu) + '</td>'
                 + '<td class="c-name">' + esc(r.nv_ten) + '</td>'
                 + '<td class="c-sku">' + esc(r.nv_ma) + '</td>'
                 + '<td class="c-name">' + esc(r.kh_ten) + '</td>'
@@ -231,17 +235,19 @@ $bctk_today = current_time('Y-m-d');
         var viewRows = [];
 
         function footer(rows) {
-            var t = { qty: 0, ck: 0, tien: 0, thue: 0, truoc: 0 };
+            var t = { qty: 0, ck: 0, tien: 0, dt: 0, thue: 0, truoc: 0 };
             rows.forEach(function (r) {
                 t.qty   += (r.qty || 0);
                 t.ck    += (r.ck || 0);
                 t.tien  += (r.tien || 0);
+                t.dt    += (r.doanh_thu || 0);
                 t.thue  += (r.thue || 0);
                 t.truoc += (r.truoc_thue || 0);
             });
             $('#fQty').text(fmt(t.qty));
             $('#fCk').text(fmt(t.ck));
             $('#fTien').text(fmt(t.tien));
+            $('#fDoanhThu').text(fmt(t.dt)).toggleClass('neg', t.dt < 0);
             $('#fThue').text(fmt(t.thue));
             $('#fTruocThue').text(fmt(t.truoc));
         }

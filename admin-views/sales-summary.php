@@ -58,6 +58,7 @@ $bctk_today = current_time('Y-m-d');
                         <th class="c-sku">Mã NV</th>
                         <th class="c-sku">Hình thức TT</th>
                         <th class="c-num">Tổng tiền</th>
+                        <th class="c-num" title="Doanh thu thuần = tiền bán trừ tiền trả lại. Phiếu trả lại hiện số âm.">Doanh thu thuần</th>
                         <th class="c-num">Số trả</th>
                         <th class="c-num">Còn nợ</th>
                         <th class="c-unit">Trả lại</th>
@@ -67,14 +68,15 @@ $bctk_today = current_time('Y-m-d');
                 </thead>
                 <tbody id="bctkBody">
                     <tr class="bctk-empty">
-                        <td colspan="16">Chọn chi nhánh bên trái, chọn khoảng ngày rồi bấm <strong>Tìm kiếm</strong>.</td>
+                        <td colspan="17">Chọn chi nhánh bên trái, chọn khoảng ngày rồi bấm <strong>Tìm kiếm</strong>.</td>
                     </tr>
                 </tbody>
-                <?php /* 10 + 1 + 1 + 1 + 3 = 16, khớp đúng số cột ở <thead> */ ?>
+                <?php /* 10 + 1 + 1 + 1 + 1 + 3 = 17, khớp đúng số cột ở <thead> */ ?>
                 <tfoot id="bctkFoot" class="bctk-hidden">
                     <tr>
                         <td colspan="10">Tổng cộng</td>
                         <td class="c-num" id="fTong">0</td>
+                        <td class="c-num" id="fDoanhThu">0</td>
                         <td class="c-num" id="fTra">0</td>
                         <td class="c-num" id="fNo">0</td>
                         <td colspan="3"></td>
@@ -128,11 +130,12 @@ $bctk_today = current_time('Y-m-d');
                 case 8:  return r.nv_ma || '';
                 case 9:  return r.httt || '';
                 case 10: return fmt(r.tong);
-                case 11: return fmt(r.da_tra);
-                case 12: return fmt(r.con_no);
-                case 13: return r.tra_lai ? 'x' : '';
-                case 14: return r.ghi_chu || '';
-                case 15: return r.kenh || '';
+                case 11: return fmt(r.doanh_thu);
+                case 12: return fmt(r.da_tra);
+                case 13: return fmt(r.con_no);
+                case 14: return r.tra_lai ? 'x' : '';
+                case 15: return r.ghi_chu || '';
+                case 16: return r.kenh || '';
                 default: return '';
             }
         }
@@ -155,6 +158,7 @@ $bctk_today = current_time('Y-m-d');
                 + '<td class="c-sku">' + esc(r.nv_ma) + '</td>'
                 + '<td class="c-sku">' + esc(r.httt) + '</td>'
                 + '<td class="c-num">' + fmt(r.tong) + '</td>'
+                + '<td class="c-num' + (r.doanh_thu < 0 ? ' neg' : '') + '">' + fmt(r.doanh_thu) + '</td>'
                 + '<td class="c-num">' + fmt(r.da_tra) + '</td>'
                 + '<td class="' + noClass + '">' + fmt(r.con_no) + '</td>'
                 + '<td class="c-unit">' + (r.tra_lai ? '&#10003;' : '') + '</td>'
@@ -166,13 +170,15 @@ $bctk_today = current_time('Y-m-d');
         var viewRows = [];
 
         function footer(rows) {
-            var t = { tong: 0, tra: 0, no: 0 };
+            var t = { tong: 0, dt: 0, tra: 0, no: 0 };
             rows.forEach(function (r) {
                 t.tong += (r.tong || 0);
+                t.dt   += (r.doanh_thu || 0);
                 t.tra  += (r.da_tra || 0);
                 t.no   += (r.con_no || 0);
             });
             $('#fTong').text(fmt(t.tong));
+            $('#fDoanhThu').text(fmt(t.dt)).toggleClass('neg', t.dt < 0);
             $('#fTra').text(fmt(t.tra));
             $('#fNo').text(fmt(t.no));
         }

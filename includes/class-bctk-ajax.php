@@ -272,6 +272,15 @@ class TGS_BCTK_Ajax
                 'nv_ma'   => (string) $r['nv_ma'],
                 'httt'    => (string) ($r['httt'] ?? ''),
                 'tong'    => $tong,
+                /*
+                 * Doanh thu thuần: phiếu bán cộng vào, phiếu trả TRỪ RA.
+                 *
+                 * Cột "Tổng tiền" cộng cả hai loại thành một đống nên khi lọc
+                 * "Tất cả" thì tổng của nó vô nghĩa — bán 3.062.000, trả
+                 * 2.150.000 mà tổng lại ra 5.212.000. Cột này mới là số nhân
+                 * viên cần: 912.000.
+                 */
+                'doanh_thu' => $is_return ? -$tong : $tong,
                 'da_tra'  => $da_tra,
                 /* Còn nợ = tổng tiền phiếu trừ phần đã thu/chi đã duyệt */
                 'con_no'  => $tong - $da_tra,
@@ -427,6 +436,9 @@ class TGS_BCTK_Ajax
                 'gia_dvt'  => $gia_dvt,
                 'ck'       => $ck_hien,
                 'tien'     => $thanh_tien,
+                /* Dòng bán cộng vào, dòng trả lại TRỪ RA — xem chú thích ở
+                   build_sales_sum_rows() */
+                'doanh_thu' => $is_return ? -$thanh_tien : $thanh_tien,
                 'thue'     => $thue,
                 /*
                  * Tiền hàng sau CK, trước thuế — công thức (2) trong tài liệu.
