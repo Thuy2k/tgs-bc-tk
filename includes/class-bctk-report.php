@@ -982,6 +982,24 @@ class TGS_BCTK_Report
             $type_sql,
             "d.local_ledger_approver_status = {$A}",
             "(d.is_deleted = 0 OR d.is_deleted IS NULL)",
+            /*
+             * Bỏ PHIẾU BÁN VỎ của hàng trả lại nhập từ phần mềm cũ.
+             *
+             * Phần mềm cũ không truy được đơn bán gốc của một phiếu trả lại —
+             * số phiếu hai bên khác nhau, chỉ biết tên và mã khách — nên
+             * tgs_htsoft_sales_import dựng một phiếu bán RỖNG làm cha để phiếu
+             * hoàn còn hình dạng cây mà báo cáo đọc được
+             * (xem TGS_HSI_Voucher_Creator::WRAPPER_PREFIX).
+             *
+             * Phiếu đó tổng tiền 0 nên không làm sai tiền, nhưng ở màn TỔNG HỢP
+             * (mỗi phiếu một dòng) thì mỗi phiếu hoàn lại đẻ thêm một "phiếu
+             * bán" — SỐ PHIẾU BÁN đếm dư đúng bằng số phiếu hoàn.
+             *
+             * Chỉ lọc ở ĐÂY. Báo cáo chi tiết (site_sales_rows) phải giữ nguyên
+             * vì nó đi qua phiếu cha để lấy dòng hàng — lọc ở đó là mất sạch
+             * dòng hoàn.
+             */
+            "d.local_ledger_code NOT LIKE 'HTS-HDV-%'",
         ];
 
         $params   = [];
