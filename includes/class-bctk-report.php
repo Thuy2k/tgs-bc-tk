@@ -1110,9 +1110,22 @@ class TGS_BCTK_Report
      *      nói một thứ là đáng tin nhất
      *   2. Không trùng thì lấy dòng cấu hình SỚM NHẤT, để kết quả cố định
      *
+     * ── MỖI SITE MỘT BẢNG GIÁ (🆕 13/08/2026) ───────────────────────────────
+     *
+     * Bảng quy đổi nay chứa NHIỀU bảng giá (Bảng giá công ty TGS, Phú Thọ,
+     * Nguyễn Tất Thành…) phân biệt bằng cột `price_list_id`; mỗi website áp
+     * đúng 1 bảng. Không lọc thì một mã hàng có dòng tỉ lệ 1 ở CẢ hai bảng giá,
+     * và quy tắc "lấy dòng sớm nhất" ở trên luôn chọn bảng giá cũ hơn — tức là
+     * site dùng bảng giá mới vẫn hiện tên ĐVT của bảng giá khác.
+     *
+     * Vì báo cáo chạy theo TỪNG SITE, phải truyền $blog_id của site đang xét
+     * chứ không dùng site hiện tại.
+     *
+     * @param array    $skus
+     * @param int|null $blog_id Site đang lập báo cáo (null = site hiện tại)
      * @return array sku => tên đơn vị nhỏ nhất
      */
-    public static function base_unit(array $skus)
+    public static function base_unit(array $skus, $blog_id = null)
     {
         global $wpdb;
 
@@ -1129,6 +1142,11 @@ class TGS_BCTK_Report
 
         $ph = implode(',', array_fill(0, count($skus), '%s'));
 
+        /* Giới hạn theo bảng giá của site; DB chưa có cột thì trả chuỗi rỗng */
+        $price_list_where = class_exists('TGS_Price_List')
+            ? TGS_Price_List::where_clause('c', $blog_id)
+            : '';
+
         /*
          * Hai bảng khác collation nên phải CONVERT trước khi so, không thì
          * MySQL báo "Illegal mix of collations" và cả báo cáo tắt tiếng.
@@ -1142,6 +1160,7 @@ class TGS_BCTK_Report
                 AND c.convert_to_htsoft = 1
                 AND c.convert_unit <> ''
                 AND (c.is_deleted = 0 OR c.is_deleted IS NULL)
+                {$price_list_where}
               ORDER BY
                 CASE WHEN CONVERT(c.convert_unit USING utf8mb4)
                           COLLATE utf8mb4_unicode_520_ci = p.global_product_unit

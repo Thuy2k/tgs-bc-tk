@@ -149,7 +149,8 @@ class TGS_BCTK_Ajax
         $info = TGS_BCTK_Report::product_info(array_column($raw, 'sku'));
         /* Cột SL là số lượng theo đơn vị nhỏ nhất, nên ĐVT đi kèm phải là đơn
            vị nhỏ nhất THẬT — lấy từ bảng quy đổi, không tin global_product_unit */
-        $base = TGS_BCTK_Report::base_unit(array_column($raw, 'sku'));
+        /* Truyền $blog_id: mỗi site áp một bảng giá riêng — xem base_unit() */
+        $base = TGS_BCTK_Report::base_unit(array_column($raw, 'sku'), $blog_id);
         $rows = [];
 
         foreach ($raw as $r) {
@@ -643,7 +644,8 @@ class TGS_BCTK_Ajax
         $skus  = array_column($raw, 'sku');
         $info  = TGS_BCTK_Report::product_info($skus);
         $group = TGS_BCTK_Report::product_group($skus);
-        $base  = TGS_BCTK_Report::base_unit($skus);
+        /* Truyền $blog_id: mỗi site áp một bảng giá riêng — xem base_unit() */
+        $base  = TGS_BCTK_Report::base_unit($skus, $blog_id);
         $rows  = [];
 
         foreach ($raw as $r) {
