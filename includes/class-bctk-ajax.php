@@ -23,6 +23,94 @@ class TGS_BCTK_Ajax
     const NONCE = 'tgs_bctk_nonce';
 
     /**
+     * Chuyển số thành chữ tiếng Việt.
+     *
+     * @param float|int $number Số tiền cần chuyển
+     * @return string Chuỗi tiếng Việt, ví dụ: "Bốn trăm ba mươi nghìn đồng chẵn"
+     */
+    private static function number_to_vietnamese($number)
+    {
+        if ($number == 0) {
+            return 'Không đồng chẵn';
+        }
+
+        $number = (int) round($number);
+
+        $units = ['', 'một', 'hai', 'ba', 'bốn', 'năm', 'sáu', 'bảy', 'tám', 'chín'];
+        $levels = ['', 'nghìn', 'triệu', 'tỷ'];
+
+        if ($number < 0) {
+            return 'Âm ' . self::number_to_vietnamese(-$number);
+        }
+
+        $result = [];
+        $level_idx = 0;
+
+        while ($number > 0) {
+            $group = $number % 1000;
+            if ($group > 0) {
+                $group_text = self::convert_group_to_vietnamese($group, $units);
+                if ($level_idx > 0) {
+                    $group_text .= ' ' . $levels[$level_idx];
+                }
+                array_unshift($result, $group_text);
+            }
+            $number = (int)($number / 1000);
+            $level_idx++;
+        }
+
+        $text = implode(' ', $result);
+        $text = ucfirst($text) . ' đồng chẵn';
+
+        return $text;
+    }
+
+    /**
+     * Chuyển một nhóm 3 chữ số thành chữ.
+     *
+     * @param int $number Số từ 0-999
+     * @param array $units Mảng đơn vị
+     * @return string
+     */
+    private static function convert_group_to_vietnamese($number, $units)
+    {
+        $hundred = (int)($number / 100);
+        $ten = (int)(($number % 100) / 10);
+        $unit = $number % 10;
+
+        $result = [];
+
+        if ($hundred > 0) {
+            $result[] = $units[$hundred] . ' trăm';
+        }
+
+        if ($ten > 1) {
+            $result[] = $units[$ten] . ' mươi';
+            if ($unit == 1) {
+                $result[] = 'mốt';
+            } elseif ($unit > 0) {
+                $result[] = $units[$unit];
+            }
+        } elseif ($ten == 1) {
+            $result[] = 'mười';
+            if ($unit > 0) {
+                $result[] = $units[$unit];
+            }
+        } else {
+            if ($hundred > 0 && $unit > 0) {
+                $result[] = 'lẻ';
+            }
+            if ($unit == 5 && $hundred > 0) {
+                $result[] = 'lăm';
+            } elseif ($unit > 0) {
+                $result[] = $units[$unit];
+            }
+        }
+
+        return implode(' ', $result);
+    }
+
+    /**
      * Nạp lớp tính tiền dùng chung.
      *
      * Báo cáo TUYỆT ĐỐI không được tự viết công thức tiền: lệch một chút là số
@@ -81,6 +169,8 @@ class TGS_BCTK_Ajax
         add_action('wp_ajax_tgs_bctk_fetch_purchase_report', [__CLASS__, 'fetch_purchase_report']);
         add_action('wp_ajax_tgs_bctk_fetch_purchase_sum', [__CLASS__, 'fetch_purchase_sum']);
         add_action('wp_ajax_tgs_bctk_refresh_nonce', [__CLASS__, 'refresh_nonce']);
+        add_action('wp_ajax_tgs_bctk_fetch_vat_sales', [__CLASS__, 'fetch_vat_sales']);
+        add_action('wp_ajax_tgs_bctk_fetch_vat_adjustment', [__CLASS__, 'fetch_vat_adjustment']);
     }
 
     /** Sổ chăm sóc khách hàng — mỗi lượt một site, giống các báo cáo khác */
@@ -1135,6 +1225,557 @@ class TGS_BCTK_Ajax
 
         return ['rows' => $rows, 'site' => $site];
     }
+
+    /**
+     * Báo cáo phiếu bán VAT — mỗi lượt một site
+     */
+    public static function fetch_vat_sales()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền xem báo cáo']);
+        }
+
+        $blog_id = isset($_POST['blog_id']) ? (int) $_POST['blog_id'] : 0;
+        $zones   = isset($_POST['zones']) && is_array($_POST['zones'])
+            ? array_map('sanitize_text_field', wp_unslash($_POST['zones']))
+            : [];
+
+        $today = current_time('Y-m-d');
+        $from  = self::sanitize_date($_POST['date_from'] ?? '', $today);
+        $to    = self::sanitize_date($_POST['date_to'] ?? '', $today);
+        $vat_status = sanitize_text_field($_POST['vat_status'] ?? 'all');
+        $doc_type = sanitize_text_field($_POST['doc_type'] ?? 'sale');
+
+        if ($blog_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu blog_id']);
+        }
+        if ($from > $to) {
+            list($from, $to) = [$to, $from];
+        }
+
+        try {
+            wp_send_json_success(self::build_vat_sales_rows($blog_id, $zones, $from, $to, $vat_status, $doc_type));
+        } catch (Exception $e) {
+            wp_send_json_error(['message' => $e->getMessage(), 'blog_id' => $blog_id]);
+        }
+    }
+
+    /**
+     * Dựng dòng báo cáo phiếu bán VAT cho một site
+     */
+    private static function build_vat_sales_rows($blog_id, array $zones, $from, $to, $vat_status, $doc_type)
+    {
+        global $wpdb;
+
+        $blog_id = (int) $blog_id;
+        $site = null;
+        foreach (TGS_BCTK_Sites::list_sites() as $s) {
+            if ($s['blog_id'] === $blog_id) { $site = $s; break; }
+        }
+        if (!$site) {
+            return ['rows' => [], 'site' => null];
+        }
+
+        $prefix = $wpdb->get_blog_prefix($blog_id);
+        $ledger_table = $prefix . 'local_ledger';
+        $item_table = $prefix . 'local_ledger_item';
+        $invoice_table = $prefix . 'local_viettel_invoice';
+        $person_table = $prefix . 'local_ledger_person';
+        $meta_table = $prefix . 'local_ledger_meta';
+        $users_table = $wpdb->users;
+
+        // Kiểm tra bảng tồn tại
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $ledger_table)) !== $ledger_table) {
+            return ['rows' => [], 'site' => $site];
+        }
+
+        $where = ["l.local_ledger_type = 10", "l.is_deleted = 0"]; // type 10 = phiếu bán
+        $where[] = $wpdb->prepare("DATE(l.created_at) >= %s", $from);
+        $where[] = $wpdb->prepare("DATE(l.created_at) <= %s", $to);
+
+        // Lọc theo loại phiếu
+        if ($doc_type === 'sale') {
+            $where[] = "l.local_ledger_code NOT LIKE '%Z'";
+        } elseif ($doc_type === 'internal') {
+            $where[] = "l.local_ledger_code LIKE '%Z'";
+        }
+
+        // Lọc theo trạng thái VAT
+        if ($vat_status === 'has_vat') {
+            $where[] = "i.viettel_invoice_no IS NOT NULL";
+        } elseif ($vat_status === 'no_vat') {
+            $where[] = "(i.viettel_invoice_no IS NULL OR i.viettel_invoice_no = '')";
+        } elseif ($vat_status === 'vat_error') {
+            $where[] = "i.invoice_state IN ('error', 'issue_error')";
+        }
+
+        $where_sql = implode(' AND ', $where);
+
+        // Switch to blog để lấy thông tin shop
+        switch_to_blog($blog_id);
+        $seller_name = get_bloginfo('name');
+        $seller_address = get_option('tgs_shop_address', '');
+        $seller_phone = get_option('tgs_shop_phone', '');
+        $seller_tax_code = get_option('tgs_shop_tax_code', '');
+        restore_current_blog();
+
+        $sql = "SELECT
+            l.local_ledger_id,
+            l.local_ledger_code,
+            l.local_ledger_item_id,
+            l.created_at,
+            l.local_ledger_total_amount as total_after_tax,
+            COALESCE(l.local_ledger_discount, 0) as total_discount,
+            l.local_ledger_note as invoice_note,
+            l.user_id as created_by,
+            COALESCE(pe.local_ledger_person_phone, '') as customer_phone,
+            COALESCE(pe.local_ledger_person_name, '') as buyer_name,
+            COALESCE(pe.local_ledger_person_address, '') as buyer_address,
+            COALESCE(pe.local_ledger_person_email, '') as buyer_email,
+            COALESCE(pe.local_ledger_person_tax_code, '') as buyer_tax_code,
+            pe.local_ledger_person_meta,
+            JSON_UNQUOTE(JSON_EXTRACT(m.local_ledger_meta_value, '$.payment_method')) as payment_method,
+            i.viettel_invoice_no,
+            i.invoice_state,
+            i.invoice_series,
+            i.template_code,
+            snap.settings_json as seller_config_json,
+            COALESCE(u.display_name, '') as cashier_name
+        FROM {$ledger_table} l
+        LEFT JOIN (
+            SELECT sale_ledger_id, viettel_invoice_no, invoice_state, invoice_series, template_code
+            FROM {$invoice_table}
+            WHERE (sale_ledger_id, local_viettel_invoice_id) IN (
+                SELECT sale_ledger_id, MAX(local_viettel_invoice_id)
+                FROM {$invoice_table}
+                GROUP BY sale_ledger_id
+            )
+        ) i ON i.sale_ledger_id = l.local_ledger_id
+        LEFT JOIN {$person_table} pe ON pe.local_ledger_person_id = l.local_ledger_person_id
+        LEFT JOIN {$meta_table} m ON m.local_ledger_meta_id = l.local_ledger_meta_id
+        LEFT JOIN {$users_table} u ON u.ID = l.user_id
+        LEFT JOIN (
+            SELECT blog_id, sale_ledger_id, settings_json
+            FROM {$wpdb->base_prefix}tgs_viettel_invoice_config_snapshots
+            WHERE (blog_id, sale_ledger_id, id) IN (
+                SELECT blog_id, sale_ledger_id, MAX(id)
+                FROM {$wpdb->base_prefix}tgs_viettel_invoice_config_snapshots
+                GROUP BY blog_id, sale_ledger_id
+            )
+        ) snap ON snap.blog_id = {$blog_id} AND snap.sale_ledger_id = l.local_ledger_id
+        WHERE {$where_sql}
+        ORDER BY l.created_at DESC
+        LIMIT 5000";
+
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+
+        // Debug: Log số dòng tìm được
+        error_log("VAT Sales: Found " . count($rows) . " ledgers for blog_id={$blog_id}, date={$from} to {$to}");
+
+        if (empty($rows)) {
+            return ['rows' => [], 'site' => $site];
+        }
+
+        // Tính toán tiền theo đúng luồng local_ledger_item
+        if (!self::money_ready()) {
+            error_log("VAT Sales: TGS_Money class not ready!");
+            return ['rows' => [], 'site' => $site];
+        }
+
+        $result_rows = [];
+        foreach ($rows as $row) {
+            $ledger_id = (int) $row['local_ledger_id'];
+
+            // Parse company name từ person_meta JSON
+            $buyer_company_name = '';
+            if (!empty($row['local_ledger_person_meta'])) {
+                $meta = json_decode($row['local_ledger_person_meta'], true);
+                $buyer_company_name = $meta['company_name'] ?? $meta['company'] ?? '';
+            }
+            $row['buyer_company_name'] = $buyer_company_name;
+
+            // Lấy các item - dựa vào local_ledger_item_id (JSON array)
+            $item_ids_json = $row['local_ledger_item_id'] ?? '[]';
+            $item_ids = json_decode($item_ids_json, true);
+
+            $items = [];
+            if (!empty($item_ids) && is_array($item_ids)) {
+                $item_ids_str = implode(',', array_map('intval', $item_ids));
+                $items_sql = "SELECT
+                        quantity,
+                        price,
+                        COALESCE(local_ledger_item_discount_amount, 0) as local_ledger_item_discount_amount,
+                        COALESCE(local_ledger_item_tax_percent, 0) as local_ledger_item_tax_percent,
+                        COALESCE(local_ledger_item_tax_amount, 0) as local_ledger_item_tax_amount
+                    FROM {$item_table}
+                    WHERE local_ledger_item_id IN ({$item_ids_str}) AND (is_deleted = 0 OR is_deleted IS NULL)";
+                $items = $wpdb->get_results($items_sql, ARRAY_A);
+            }
+
+            $total_tax = 0;
+            $total_before_tax = 0;
+            $total_after_tax = 0;
+            $tax_percent = 0;
+
+            if (!empty($items)) {
+                // Có items: tính theo TGS_Money::from_item() (đúng theo tài liệu)
+                foreach ($items as $item) {
+                    // Dùng TGS_Money::from_item() theo đúng tài liệu
+                    $money = TGS_Money::from_item($item);
+                    $thanh_tien = TGS_Money::lam_tron_dong($money['thanh_tien']); // Khách trả
+                    $tien_hang_sau_ck = $money['tien_hang_sau_ck']; // Tiền hàng sau CK, trước thuế
+                    $thue = TGS_Money::lam_tron_dong($money['thue']); // Tiền thuế
+
+                    $total_after_tax += $thanh_tien;
+                    $total_before_tax += TGS_Money::lam_tron_dong($tien_hang_sau_ck);
+                    $total_tax += $thue;
+
+                    // Lấy thuế suất đại diện (nếu hóa đơn có item thuế khác nhau thì lấy cái đầu tiên)
+                    if ($tax_percent === 0 && $item['local_ledger_item_tax_percent'] > 0) {
+                        $tax_percent = $item['local_ledger_item_tax_percent'];
+                    }
+                }
+            } else {
+                // Không có items: fallback về local_ledger_total_amount
+                // (trường hợp này không nên xảy ra, nhưng nếu có thì vẫn hiển thị)
+                $total_after_tax = (float) $row['total_after_tax'];
+                $total_discount = (float) $row['total_discount'];
+
+                // Tính ngược: total_before_tax = total_after_tax - total_tax
+                // Giả sử thuế 8% (hoặc lấy từ invoice nếu có)
+                // total_after_tax = total_before_tax * 1.08
+                // => total_before_tax = total_after_tax / 1.08
+                $tax_rate = 0.08; // Default 8%
+                $total_before_tax = $total_after_tax / (1 + $tax_rate);
+                $total_tax = $total_after_tax - $total_before_tax;
+                $tax_percent = $tax_rate * 100;
+            }
+
+            $row['total_tax_amount'] = $total_tax;
+            $row['total_before_tax'] = $total_before_tax;
+            $row['total_after_tax'] = $total_after_tax; // Override với số tính từ items hoặc ledger
+            $row['tax_percent'] = $tax_percent;
+            $row['amount_in_words'] = self::number_to_vietnamese($total_after_tax);
+            $row['item_count'] = count($items); // Đếm số items thật sự
+
+            // Parse thông tin seller từ seller_config_json (snapshot lúc gửi invoice)
+            $seller_company_name = $seller_name;
+            $seller_address_final = $seller_address;
+            $seller_phone_final = $seller_phone;
+            $seller_tax_code_final = $seller_tax_code;
+
+            if (!empty($row['seller_config_json'])) {
+                $config = json_decode($row['seller_config_json'], true);
+                if (!empty($config['company_name'])) {
+                    $seller_company_name = $config['company_name'];
+                }
+                if (!empty($config['company_address'])) {
+                    $seller_address_final = $config['company_address'];
+                }
+                if (!empty($config['company_phone'])) {
+                    $seller_phone_final = $config['company_phone'];
+                }
+                if (!empty($config['supplier_tax_code'])) {
+                    $seller_tax_code_final = $config['supplier_tax_code'];
+                }
+            }
+
+            $row['seller_company_name'] = $seller_company_name;
+            $row['seller_address'] = $seller_address_final;
+            $row['seller_phone'] = $seller_phone_final;
+            $row['seller_tax_code'] = $seller_tax_code_final;
+
+            // Normalize payment_method
+            if (empty($row['payment_method'])) {
+                $row['payment_method'] = 'Tiền mặt';
+            }
+
+            // Xóa meta JSON khỏi response
+            unset($row['local_ledger_person_meta']);
+            unset($row['seller_config_json']);
+
+            $result_rows[] = $row;
+        }
+
+        error_log("VAT Sales: Returning " . count($result_rows) . " processed rows");
+
+        return ['rows' => $result_rows, 'site' => $site];
+    }
+
+    /**
+     * Báo cáo phiếu điều chỉnh giảm VAT — mỗi lượt một site
+     */
+    public static function fetch_vat_adjustment()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền xem báo cáo']);
+        }
+
+        $blog_id = isset($_POST['blog_id']) ? (int) $_POST['blog_id'] : 0;
+        $zones   = isset($_POST['zones']) && is_array($_POST['zones'])
+            ? array_map('sanitize_text_field', wp_unslash($_POST['zones']))
+            : [];
+
+        $today = current_time('Y-m-d');
+        $from  = self::sanitize_date($_POST['date_from'] ?? '', $today);
+        $to    = self::sanitize_date($_POST['date_to'] ?? '', $today);
+        $vat_status = sanitize_text_field($_POST['vat_status'] ?? 'all');
+        $doc_type = sanitize_text_field($_POST['doc_type'] ?? 'adjustment');
+
+        if ($blog_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu blog_id']);
+        }
+        if ($from > $to) {
+            list($from, $to) = [$to, $from];
+        }
+
+        try {
+            wp_send_json_success(self::build_vat_adjustment_rows($blog_id, $zones, $from, $to, $vat_status, $doc_type));
+        } catch (Exception $e) {
+            wp_send_json_error(['message' => $e->getMessage(), 'blog_id' => $blog_id]);
+        }
+    }
+
+    /**
+     * Dựng dòng báo cáo phiếu điều chỉnh giảm VAT cho một site
+     */
+    private static function build_vat_adjustment_rows($blog_id, array $zones, $from, $to, $vat_status, $doc_type)
+    {
+        global $wpdb;
+
+        $blog_id = (int) $blog_id;
+        $site = null;
+        foreach (TGS_BCTK_Sites::list_sites() as $s) {
+            if ($s['blog_id'] === $blog_id) { $site = $s; break; }
+        }
+        if (!$site) {
+            return ['rows' => [], 'site' => null];
+        }
+
+        $prefix = $wpdb->get_blog_prefix($blog_id);
+        $ledger_table = $prefix . 'local_ledger';
+        $item_table = $prefix . 'local_ledger_item';
+        $adjustment_table = $wpdb->base_prefix . 'tgs_viettel_invoice_return_adjustments';
+        $person_table = $prefix . 'local_ledger_person';
+        $meta_table = $prefix . 'local_ledger_meta';
+        $users_table = $wpdb->users;
+
+        // Kiểm tra bảng tồn tại
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $ledger_table)) !== $ledger_table) {
+            return ['rows' => [], 'site' => $site];
+        }
+
+        $where = ["r.local_ledger_type = 11", "r.is_deleted = 0"]; // type 11 = phiếu hoàn hàng
+        $where[] = $wpdb->prepare("DATE(r.created_at) >= %s", $from);
+        $where[] = $wpdb->prepare("DATE(r.created_at) <= %s", $to);
+
+        // Lọc theo loại phiếu
+        if ($doc_type === 'adjustment') {
+            $where[] = "r.local_ledger_code NOT LIKE '%Z'";
+        } elseif ($doc_type === 'internal') {
+            $where[] = "r.local_ledger_code LIKE '%Z'";
+        }
+
+        // Lọc theo trạng thái VAT
+        if ($vat_status === 'has_vat') {
+            $where[] = "a.adjustment_invoice_no IS NOT NULL AND a.adjustment_invoice_no != ''";
+        } elseif ($vat_status === 'no_vat') {
+            $where[] = "(a.adjustment_invoice_no IS NULL OR a.adjustment_invoice_no = '')";
+        } elseif ($vat_status === 'vat_error') {
+            $where[] = "a.status IN ('error', 'issue_error')";
+        }
+
+        $where_sql = implode(' AND ', $where);
+
+        // Switch to blog để lấy thông tin shop
+        switch_to_blog($blog_id);
+        $seller_name = get_bloginfo('name');
+        $seller_address = get_option('tgs_shop_address', '');
+        $seller_phone = get_option('tgs_shop_phone', '');
+        $seller_tax_code = get_option('tgs_shop_tax_code', '');
+        restore_current_blog();
+
+        $sql = "SELECT
+            r.local_ledger_id as return_ledger_id,
+            r.local_ledger_code,
+            r.local_ledger_item_id,
+            r.created_at,
+            r.local_ledger_total_amount as total_after_tax,
+            COALESCE(r.local_ledger_discount, 0) as total_discount,
+            r.local_ledger_note as return_reason,
+            r.user_id as created_by,
+            COALESCE(pe.local_ledger_person_phone, '') as customer_phone,
+            COALESCE(pe.local_ledger_person_name, '') as buyer_name,
+            COALESCE(pe.local_ledger_person_address, '') as buyer_address,
+            COALESCE(pe.local_ledger_person_email, '') as buyer_email,
+            COALESCE(pe.local_ledger_person_tax_code, '') as buyer_tax_code,
+            pe.local_ledger_person_meta,
+            s.local_ledger_code as original_sale_code,
+            a.adjustment_invoice_no,
+            a.original_invoice_no,
+            a.status as adjustment_status,
+            a.sale_ledger_id as original_sale_ledger_id,
+            snap.settings_json as seller_config_json,
+            COALESCE(u.display_name, '') as cashier_name,
+            JSON_UNQUOTE(JSON_EXTRACT(m.local_ledger_meta_value, '$.payment_method')) as payment_method
+        FROM {$ledger_table} r
+        LEFT JOIN (
+            SELECT return_ledger_id, blog_id, adjustment_invoice_no, original_invoice_no, status, sale_ledger_id
+            FROM {$adjustment_table}
+            WHERE (return_ledger_id, id) IN (
+                SELECT return_ledger_id, MAX(id)
+                FROM {$adjustment_table}
+                GROUP BY return_ledger_id
+            )
+        ) a ON a.return_ledger_id = r.local_ledger_id AND a.blog_id = {$blog_id}
+        LEFT JOIN {$ledger_table} s ON s.local_ledger_id = r.local_ledger_item_id
+        LEFT JOIN {$person_table} pe ON pe.local_ledger_person_id = r.local_ledger_person_id
+        LEFT JOIN {$meta_table} m ON m.local_ledger_meta_id = r.local_ledger_meta_id
+        LEFT JOIN {$users_table} u ON u.ID = r.user_id
+        LEFT JOIN (
+            SELECT blog_id, sale_ledger_id, settings_json
+            FROM {$wpdb->base_prefix}tgs_viettel_invoice_config_snapshots
+            WHERE (blog_id, sale_ledger_id, id) IN (
+                SELECT blog_id, sale_ledger_id, MAX(id)
+                FROM {$wpdb->base_prefix}tgs_viettel_invoice_config_snapshots
+                GROUP BY blog_id, sale_ledger_id
+            )
+        ) snap ON snap.blog_id = {$blog_id} AND snap.sale_ledger_id = a.sale_ledger_id
+        WHERE {$where_sql}
+        ORDER BY r.created_at DESC
+        LIMIT 5000";
+
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+
+        if (empty($rows)) {
+            return ['rows' => [], 'site' => $site];
+        }
+
+        // Tính toán tiền
+        if (!self::money_ready()) {
+            return ['rows' => [], 'site' => $site];
+        }
+
+        $result_rows = [];
+        foreach ($rows as $row) {
+            $return_id = (int) $row['return_ledger_id'];
+
+            // Parse company name từ person_meta JSON
+            $buyer_company_name = '';
+            if (!empty($row['local_ledger_person_meta'])) {
+                $meta = json_decode($row['local_ledger_person_meta'], true);
+                $buyer_company_name = $meta['company_name'] ?? $meta['company'] ?? '';
+            }
+            $row['buyer_company_name'] = $buyer_company_name;
+
+            // Lấy các item - dựa vào local_ledger_item_id (JSON array)
+            $item_ids_json = $row['local_ledger_item_id'] ?? '[]';
+            $item_ids = json_decode($item_ids_json, true);
+
+            $items = [];
+            if (!empty($item_ids) && is_array($item_ids)) {
+                $item_ids_str = implode(',', array_map('intval', $item_ids));
+                $items_sql = "SELECT
+                        quantity,
+                        price,
+                        COALESCE(local_ledger_item_discount_amount, 0) as local_ledger_item_discount_amount,
+                        COALESCE(local_ledger_item_tax_percent, 0) as local_ledger_item_tax_percent,
+                        COALESCE(local_ledger_item_tax_amount, 0) as local_ledger_item_tax_amount
+                    FROM {$item_table}
+                    WHERE local_ledger_item_id IN ({$item_ids_str}) AND (is_deleted = 0 OR is_deleted IS NULL)";
+                $items = $wpdb->get_results($items_sql, ARRAY_A);
+            }
+
+            $total_tax = 0;
+            $total_before_tax = 0;
+            $total_after_tax = 0;
+            $tax_percent = 0;
+
+            if (!empty($items)) {
+                // Có items: tính theo TGS_Money::from_item() (đúng theo tài liệu)
+                foreach ($items as $item) {
+                    // Dùng TGS_Money::from_item() theo đúng tài liệu
+                    $money = TGS_Money::from_item($item);
+                    $thanh_tien = TGS_Money::lam_tron_dong($money['thanh_tien']);
+                    $tien_hang_sau_ck = $money['tien_hang_sau_ck'];
+                    $thue = TGS_Money::lam_tron_dong($money['thue']);
+
+                    // Phiếu hoàn thì lấy giá trị tuyệt đối (số dương)
+                    $total_after_tax += abs($thanh_tien);
+                    $total_before_tax += abs(TGS_Money::lam_tron_dong($tien_hang_sau_ck));
+                    $total_tax += abs($thue);
+
+                    if ($tax_percent === 0 && $item['local_ledger_item_tax_percent'] > 0) {
+                        $tax_percent = abs($item['local_ledger_item_tax_percent']);
+                    }
+                }
+            } else {
+                // Không có items: fallback về local_ledger_total_amount
+                $total_after_tax = abs((float) $row['total_after_tax']);
+
+                // Tính ngược với thuế 8%
+                $tax_rate = 0.08;
+                $total_before_tax = $total_after_tax / (1 + $tax_rate);
+                $total_tax = $total_after_tax - $total_before_tax;
+                $tax_percent = $tax_rate * 100;
+            }
+
+            $row['total_tax_amount'] = $total_tax;
+            $row['total_before_tax'] = $total_before_tax;
+            $row['total_after_tax'] = $total_after_tax;
+            $row['tax_percent'] = $tax_percent;
+            $row['amount_in_words'] = self::number_to_vietnamese($total_after_tax);
+            $row['item_count'] = count($items); // Đếm số items thật sự
+            $row['invoice_series'] = '';
+            $row['template_code'] = '';
+
+            // Parse thông tin seller từ seller_config_json (snapshot lúc gửi invoice)
+            $seller_company_name = $seller_name;
+            $seller_address_final = $seller_address;
+            $seller_phone_final = $seller_phone;
+            $seller_tax_code_final = $seller_tax_code;
+
+            if (!empty($row['seller_config_json'])) {
+                $config = json_decode($row['seller_config_json'], true);
+                if (!empty($config['company_name'])) {
+                    $seller_company_name = $config['company_name'];
+                }
+                if (!empty($config['company_address'])) {
+                    $seller_address_final = $config['company_address'];
+                }
+                if (!empty($config['company_phone'])) {
+                    $seller_phone_final = $config['company_phone'];
+                }
+                if (!empty($config['supplier_tax_code'])) {
+                    $seller_tax_code_final = $config['supplier_tax_code'];
+                }
+            }
+
+            $row['seller_company_name'] = $seller_company_name;
+            $row['seller_address'] = $seller_address_final;
+            $row['seller_phone'] = $seller_phone_final;
+            $row['seller_tax_code'] = $seller_tax_code_final;
+            $row['invoice_note'] = $row['return_reason'];
+
+            // Normalize payment_method
+            if (empty($row['payment_method'])) {
+                $row['payment_method'] = 'Tiền mặt';
+            }
+
+            // Xóa meta JSON khỏi response
+            unset($row['local_ledger_person_meta']);
+            unset($row['seller_config_json']);
+
+            $result_rows[] = $row;
+        }
+
+        return ['rows' => $result_rows, 'site' => $site];
+    }
 }
+
 
 TGS_BCTK_Ajax::init();
