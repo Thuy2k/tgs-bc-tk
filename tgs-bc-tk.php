@@ -33,6 +33,7 @@ define('TGS_BCTK_CAPABILITY', 'read');
 require_once TGS_BCTK_DIR . 'includes/class-bctk-sites.php';
 require_once TGS_BCTK_DIR . 'includes/class-bctk-report.php';
 require_once TGS_BCTK_DIR . 'includes/class-bctk-ajax.php';
+require_once TGS_BCTK_DIR . 'includes/class-bctk-vat-shops.php';
 
 class TGS_BCTK_Plugin
 {
@@ -45,6 +46,11 @@ class TGS_BCTK_Plugin
     const VIEW_SALESSUM = 'bctk-sales-sum';
     const VIEW_PURREPORT = 'bctk-purchase-report';
     const VIEW_PURSUM    = 'bctk-purchase-sum';
+
+    /** Khối QUẢN LÝ VAT — chỉ đụng tới shop đã khai áp dụng thuế */
+    const VIEW_VAT_SALES  = 'bctk-vat-sales';
+    const VIEW_VAT_ADJUST = 'bctk-vat-adjust';
+    const VIEW_VAT_SHOPS  = 'bctk-vat-shops';
 
     /** Mọi view của BC_TK — thêm màn mới chỉ cần khai ở đây */
     private static function views()
@@ -59,6 +65,27 @@ class TGS_BCTK_Plugin
             self::VIEW_SALES  => ['Báo cáo bán hàng / Hàng bán trả lại', 'Báo cáo bán hàng', 'bx bx-receipt', 'sales-report.php'],
             self::VIEW_SALESSUM => ['Tổng hợp bán hàng', 'Tổng hợp bán hàng', 'bx bx-list-check', 'sales-summary.php'],
         ];
+    }
+
+    /**
+     * Các màn của khối QUẢN LÝ VAT.
+     *
+     * Để riêng khỏi views() vì chúng thành một khối menu độc lập, không nằm
+     * chung khối BC_TK — nghiệp vụ khác hẳn (thuế, không phải báo cáo kho).
+     */
+    private static function vat_views()
+    {
+        return [
+            self::VIEW_VAT_SALES  => ['Quản lý phiếu xuất bán (VAT)', 'Phiếu xuất bán', 'bx bx-receipt', 'vat-sales.php'],
+            self::VIEW_VAT_ADJUST => ['Quản lý phiếu điều chỉnh giảm (VAT)', 'Phiếu điều chỉnh giảm', 'bx bx-minus-circle', 'vat-adjust.php'],
+            self::VIEW_VAT_SHOPS  => ['Shop áp dụng thuế', 'Shop áp dụng thuế', 'bx bx-store-alt', 'vat-shops.php'],
+        ];
+    }
+
+    /** Mọi view của plugin — BC_TK và Quản lý VAT gộp lại */
+    private static function all_views()
+    {
+        return self::views() + self::vat_views();
     }
 
     /**
@@ -118,6 +145,26 @@ class TGS_BCTK_Plugin
             $workflow_nav['sales']['sections'][] = $block($sales_items);
         }
 
+        /*
+         * Khối QUẢN LÝ VAT — một khối riêng, không nhét chung BC_TK.
+         *
+         * Đặt trong menu Bán hàng vì cả ba màn đều xoay quanh chứng từ bán ra
+         * (phiếu xuất bán, điều chỉnh giảm) và danh sách shop đang xuất hoá đơn.
+         */
+        if (isset($workflow_nav['sales']['sections'])) {
+            $vat_items = [];
+            foreach (self::vat_views() as $view => $meta) {
+                $vat_items[] = ['view' => $view, 'label' => $meta[1], 'icon' => $meta[2]];
+            }
+
+            $workflow_nav['sales']['sections'][] = [
+                'key'     => 'bctk-vat',
+                'heading' => 'Quản lý VAT',
+                'icon'    => 'bx bx-file',
+                'items'   => $vat_items,
+            ];
+        }
+
         if (!isset($workflow_nav['purchase']['sections'])) {
             return $workflow_nav;
         }
@@ -130,7 +177,7 @@ class TGS_BCTK_Plugin
     /** Route dùng đường dẫn tuyệt đối — plugin shop hỗ trợ sẵn kiểu này */
     public static function register_routes($routes)
     {
-        foreach (self::views() as $view => $meta) {
+        foreach (self::all_views() as $view => $meta) {
             $routes[$view] = [$meta[0], TGS_BCTK_DIR . 'admin-views/' . $meta[3]];
         }
 
@@ -144,7 +191,7 @@ class TGS_BCTK_Plugin
             return;
         }
         $view = isset($_GET['view']) ? sanitize_text_field(wp_unslash($_GET['view'])) : '';
-        if (!array_key_exists($view, self::views())) {
+        if (!array_key_exists($view, self::all_views())) {
             return;
         }
 
@@ -169,6 +216,22 @@ class TGS_BCTK_Plugin
             TGS_BCTK_VERSION . '.' . @filemtime(TGS_BCTK_DIR . 'assets/js/bctk-filter.js'),
             true
         );
+
+        // Màn khai shop áp dụng VAT có JS riêng (thêm/sửa/xoá), các màn khác không cần
+        if ($view === self::VIEW_VAT_SHOPS) {
+            wp_enqueue_script(
+                'tgs-bctk-vat-shops',
+                TGS_BCTK_URL . 'assets/js/bctk-vat-shops.js',
+                ['jquery'],
+                TGS_BCTK_VERSION . '.' . @filemtime(TGS_BCTK_DIR . 'assets/js/bctk-vat-shops.js'),
+                true
+            );
+
+            wp_localize_script('tgs-bctk-vat-shops', 'tgsBctkVat', [
+                'ajaxUrl' => admin_url('admin-ajax.php'),
+                'nonce'   => wp_create_nonce(TGS_BCTK_Vat_Shops::NONCE_ACTION),
+            ]);
+        }
     }
 }
 

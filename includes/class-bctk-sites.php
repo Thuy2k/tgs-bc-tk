@@ -242,9 +242,26 @@ class TGS_BCTK_Sites
      * với ~70 site thì số lượt gọi mới là thứ làm chậm, không phải kích thước
      * gói dữ liệu.
      */
-    public static function filter_bootstrap()
+    /**
+     * @param int[]|null $only_blog_ids Chỉ dựng bộ lọc cho mấy blog này. null =
+     *                                  toàn bộ chi nhánh như cũ.
+     *
+     * Khối Quản lý VAT truyền vào danh sách shop đã khai áp dụng thuế: bộ lọc
+     * chỉ hiện đúng mấy shop đó, khỏi phải dò giữa hàng chục chi nhánh không
+     * liên quan. Mảng rỗng nghĩa là CHƯA KHAI SHOP NÀO — vẫn trả bộ lọc rỗng
+     * chứ không âm thầm hiện lại toàn bộ, để người dùng biết mà đi khai.
+     */
+    public static function filter_bootstrap($only_blog_ids = null)
     {
         $sites = self::list_sites();
+
+        if (is_array($only_blog_ids)) {
+            $allow = array_flip(array_map('intval', $only_blog_ids));
+            $sites = array_values(array_filter($sites, static function ($s) use ($allow) {
+                return isset($allow[(int) $s['blog_id']]);
+            }));
+        }
+
         $zones = [];
 
         foreach ($sites as $s) {
