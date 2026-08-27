@@ -1860,6 +1860,11 @@ class TGS_BCTK_Ajax
 
             error_log("get_sales_detail: found " . count($items) . " items from IDs: " . json_encode($item_ids));
 
+            // Debug: log sample item
+            if (!empty($items)) {
+                error_log("get_sales_detail: first item = " . json_encode($items[0]));
+            }
+
             // Lấy thông tin khách hàng
             $customer = null;
             if (!empty($ledger['customer_id'])) {
@@ -1877,20 +1882,27 @@ class TGS_BCTK_Ajax
                 $ledger_id
             ), ARRAY_A);
 
-            // Lấy thông tin sản phẩm
-            $skus = array_column($items, 'sku');
+            // Lấy thông tin sản phẩm từ bảng global_product_name (không phải global_product)
+            $skus = array_column($items, 'local_product_sku');
             $product_info = [];
             if (!empty($skus)) {
                 error_log('get_sales_detail: Looking up products for SKUs: ' . json_encode($skus));
                 $placeholders = implode(',', array_fill(0, count($skus), '%s'));
+
+                // Bảng đúng là global_product_name, không phải global_product
+                global $wpdb;
+                $global_table = $wpdb->base_prefix . 'global_product_name';
+
                 $products = $wpdb->get_results(
                     $wpdb->prepare(
-                        "SELECT sku, name FROM {$wpdb->prefix}global_product WHERE sku IN ($placeholders)",
+                        "SELECT global_product_sku as sku, global_product_name as name
+                         FROM {$global_table}
+                         WHERE global_product_sku IN ($placeholders)",
                         ...$skus
                     ),
                     ARRAY_A
                 );
-                error_log('get_sales_detail: Found ' . count($products) . ' products');
+                error_log('get_sales_detail: Found ' . count($products) . ' products from ' . $global_table);
                 foreach ($products as $p) {
                     $product_info[$p['sku']] = $p['name'];
                 }
@@ -2027,20 +2039,27 @@ class TGS_BCTK_Ajax
                 ), ARRAY_A);
             }
 
-            // Lấy thông tin sản phẩm
-            $skus = array_column($items, 'sku');
+            // Lấy thông tin sản phẩm từ bảng global_product_name (không phải global_product)
+            $skus = array_column($items, 'local_product_sku');
             $product_info = [];
             if (!empty($skus)) {
                 error_log('get_adjustment_detail: Looking up products for SKUs: ' . json_encode($skus));
                 $placeholders = implode(',', array_fill(0, count($skus), '%s'));
+
+                // Bảng đúng là global_product_name, không phải global_product
+                global $wpdb;
+                $global_table = $wpdb->base_prefix . 'global_product_name';
+
                 $products = $wpdb->get_results(
                     $wpdb->prepare(
-                        "SELECT sku, name FROM {$wpdb->prefix}global_product WHERE sku IN ($placeholders)",
+                        "SELECT global_product_sku as sku, global_product_name as name
+                         FROM {$global_table}
+                         WHERE global_product_sku IN ($placeholders)",
                         ...$skus
                     ),
                     ARRAY_A
                 );
-                error_log('get_adjustment_detail: Found ' . count($products) . ' products');
+                error_log('get_adjustment_detail: Found ' . count($products) . ' products from ' . $global_table);
                 foreach ($products as $p) {
                     $product_info[$p['sku']] = $p['name'];
                 }

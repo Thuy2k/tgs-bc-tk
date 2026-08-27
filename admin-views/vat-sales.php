@@ -347,7 +347,8 @@ $bctk_vat_shop_count = count($bctk_vat_blog_ids);
 
             for (var i = 0; i < items.length; i++) {
                 var item = items[i];
-                var productName = productInfo[item.sku] || item.sku;
+                var sku = item.local_product_sku || item.sku || '-';
+                var productName = productInfo[sku] || sku;
 
                 // Tính toán theo đúng mô hình tiền
                 var qty = parseFloat(item.quantity || 0);
@@ -369,10 +370,10 @@ $bctk_vat_shop_count = count($bctk_vat_blog_ids);
 
                 html += '<tr>';
                 html += '<td>' + (i + 1) + '</td>';
-                html += '<td>' + esc(item.sku) + '</td>';
+                html += '<td>' + esc(sku) + '</td>';
                 html += '<td>' + esc(productName) + '</td>';
                 html += '<td>' + qty + '</td>';
-                html += '<td>' + esc(item.unit_name || '-') + '</td>';
+                html += '<td>' + esc(item.local_ledger_item_unit_name || '-') + '</td>';
                 html += '<td class="text-end">' + formatMoney(price) + '</td>';
                 html += '<td class="text-end">' + formatMoney(discount) + '</td>';
                 html += '<td class="text-end">' + formatMoney(taxAmount) + ' (' + taxPercent + '%)</td>';
