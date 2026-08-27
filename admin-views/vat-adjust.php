@@ -144,8 +144,47 @@ $bctk_vat_shop_count = count($bctk_vat_blog_ids);
             return fmt(Math.round(Math.abs(num))) + ' đồng';
         }
 
-        B.setRenderer(function (row) {
-            return '<td class="c-sku">' + esc(row.invoice_series || '-') + '</td>' +
+        function cellText(r, col) {
+            switch (col) {
+                case 0:  return r.invoice_series || '';
+                case 1:  return r.template_code || '';
+                case 2:  return r.payment_method || 'Tiền mặt';
+                case 3:  return r.customer_phone || '';
+                case 4:  return r.adjustment_invoice_no || r.local_ledger_code || '';
+                case 5:  return r.invoice_note || r.return_reason || '';
+                case 6:  return fmt(Math.abs(r.total_before_tax || 0));
+                case 7:  return ngay(r.created_at);
+                case 8:  return fmt(Math.abs(r.total_tax_amount || 0));
+                case 9:  return fmt(Math.abs(r.total_after_tax || 0));
+                case 10: return numberToVietnamese(r.total_after_tax);
+                case 11: return fmt(Math.abs(r.total_discount || 0));
+                case 12: return r.tax_percent ? r.tax_percent + '%' : '';
+                case 13: return r.buyer_company_name || '';
+                case 14: return r.buyer_name || 'Khách lẻ';
+                case 15: return r.buyer_address || '';
+                case 16: return r.buyer_email || '';
+                case 17: return r.buyer_phone || '';
+                case 18: return r.buyer_tax_code || '';
+                case 19: return r.seller_address || '';
+                case 20: return r.seller_company_name || '';
+                case 21: return r.seller_phone || '';
+                case 22: return r.seller_tax_code || '';
+                case 23: return ngay(r.created_at);
+                case 24: return r.local_ledger_code || '';
+                case 25: return r.cashier_name || '';
+                case 26: return r.return_reason || 'Điều chỉnh giảm';
+                case 27: return getVatStatus(r);
+                case 28: return '';
+                case 29: return String(r.item_count || 0);
+                case 30: return r.created_by || '';
+                case 31: return r.original_invoice_no || r.original_sale_code || '';
+                default: return '';
+            }
+        }
+
+        function rowHtml(row) {
+            return '<tr>' +
+                '<td class="c-sku">' + esc(row.invoice_series || '-') + '</td>' +
                 '<td class="c-sku">' + esc(row.template_code || '-') + '</td>' +
                 '<td class="c-unit">' + esc(row.payment_method || 'Tiền mặt') + '</td>' +
                 '<td class="c-sku">' + esc(row.customer_phone || '-') + '</td>' +
@@ -176,7 +215,28 @@ $bctk_vat_shop_count = count($bctk_vat_blog_ids);
                 '<td class="c-sku">-</td>' +
                 '<td class="c-num">' + (row.item_count || 0) + '</td>' +
                 '<td class="c-sku">' + esc(row.created_by || '-') + '</td>' +
-                '<td class="c-sku">' + esc(row.original_invoice_no || row.original_sale_code || '-') + '</td>';
+                '<td class="c-sku">' + esc(row.original_invoice_no || row.original_sale_code || '-') + '</td>' +
+                '</tr>';
+        }
+
+        B.setRenderer(function (rows) {
+            var table = document.getElementById('bctkTable');
+            var ds = window.TGSDesignSystem;
+
+            if (ds && ds.renderVirtualizedTable) {
+                ds.renderVirtualizedTable({
+                    table: table,
+                    rows: rows,
+                    rowHtml: rowHtml,
+                    cellText: cellText
+                });
+            } else {
+                var buf = [];
+                for (var i = 0; i < rows.length; i++) {
+                    buf.push(rowHtml(rows[i]));
+                }
+                document.getElementById('bctkBody').innerHTML = buf.join('');
+            }
         });
     });
 </script>

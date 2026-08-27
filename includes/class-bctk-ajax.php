@@ -1632,7 +1632,7 @@ class TGS_BCTK_Ajax
                 GROUP BY return_ledger_id
             )
         ) a ON a.return_ledger_id = r.local_ledger_id AND a.blog_id = {$blog_id}
-        LEFT JOIN {$ledger_table} s ON s.local_ledger_id = r.local_ledger_item_id
+        LEFT JOIN {$ledger_table} s ON s.local_ledger_id = a.sale_ledger_id
         LEFT JOIN {$person_table} pe ON pe.local_ledger_person_id = r.local_ledger_person_id
         LEFT JOIN {$meta_table} m ON m.local_ledger_meta_id = r.local_ledger_meta_id
         LEFT JOIN {$users_table} u ON u.ID = r.user_id
