@@ -171,6 +171,8 @@ class TGS_BCTK_Ajax
         add_action('wp_ajax_tgs_bctk_refresh_nonce', [__CLASS__, 'refresh_nonce']);
         add_action('wp_ajax_tgs_bctk_fetch_vat_sales', [__CLASS__, 'fetch_vat_sales']);
         add_action('wp_ajax_tgs_bctk_fetch_vat_adjustment', [__CLASS__, 'fetch_vat_adjustment']);
+        add_action('wp_ajax_tgs_bctk_get_sales_detail', [__CLASS__, 'get_sales_detail']);
+        add_action('wp_ajax_tgs_bctk_get_adjustment_detail', [__CLASS__, 'get_adjustment_detail']);
     }
 
     /** Sổ chăm sóc khách hàng — mỗi lượt một site, giống các báo cáo khác */
@@ -1322,8 +1324,10 @@ class TGS_BCTK_Ajax
         restore_current_blog();
 
         $sql = "SELECT
+            {$blog_id} as blog_id,
             l.local_ledger_id,
             l.local_ledger_code,
+            l.local_ledger_type,
             l.local_ledger_item_id,
             l.created_at,
             l.local_ledger_total_amount as total_after_tax,
@@ -1342,8 +1346,10 @@ class TGS_BCTK_Ajax
             i.invoice_series,
             i.template_code,
             snap.settings_json as seller_config_json,
-            COALESCE(u.display_name, '') as cashier_name
+            COALESCE(u.display_name, '') as cashier_name,
+            COALESCE(b.tgs_site_code, '') as site_code
         FROM {$ledger_table} l
+        LEFT JOIN {$wpdb->blogs} b ON b.blog_id = {$blog_id}
         LEFT JOIN (
             SELECT sale_ledger_id, viettel_invoice_no, invoice_state, invoice_series, template_code
             FROM {$invoice_table}
@@ -1373,6 +1379,13 @@ class TGS_BCTK_Ajax
 
         // Debug: Log số dòng tìm được
         error_log("VAT Sales: Found " . count($rows) . " ledgers for blog_id={$blog_id}, date={$from} to {$to}");
+
+        // Debug: Log dòng đầu tiên để xem cấu trúc
+        if (!empty($rows)) {
+            error_log("VAT Sales: First row sample - local_ledger_id=" . $rows[0]['local_ledger_id'] .
+                ", local_ledger_type=" . ($rows[0]['local_ledger_type'] ?? 'NULL') .
+                ", code=" . $rows[0]['local_ledger_code']);
+        }
 
         if (empty($rows)) {
             return ['rows' => [], 'site' => $site];
@@ -1600,8 +1613,10 @@ class TGS_BCTK_Ajax
         restore_current_blog();
 
         $sql = "SELECT
+            {$blog_id} as blog_id,
             r.local_ledger_id as return_ledger_id,
             r.local_ledger_code,
+            r.local_ledger_type,
             r.local_ledger_item_id,
             r.created_at,
             r.local_ledger_total_amount as total_after_tax,
@@ -1621,8 +1636,10 @@ class TGS_BCTK_Ajax
             a.sale_ledger_id as original_sale_ledger_id,
             snap.settings_json as seller_config_json,
             COALESCE(u.display_name, '') as cashier_name,
+            COALESCE(b.tgs_site_code, '') as site_code,
             JSON_UNQUOTE(JSON_EXTRACT(m.local_ledger_meta_value, '$.payment_method')) as payment_method
         FROM {$ledger_table} r
+        LEFT JOIN {$wpdb->blogs} b ON b.blog_id = {$blog_id}
         LEFT JOIN (
             SELECT return_ledger_id, blog_id, adjustment_invoice_no, original_invoice_no, status, sale_ledger_id
             FROM {$adjustment_table}
@@ -1774,6 +1791,294 @@ class TGS_BCTK_Ajax
         }
 
         return ['rows' => $result_rows, 'site' => $site];
+    }
+
+    /**
+     * Lấy chi tiết phiếu bán để hiển thị trong modal
+     */
+    public static function get_sales_detail()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền xem báo cáo']);
+        }
+
+        $blog_id = isset($_POST['blog_id']) ? (int) $_POST['blog_id'] : 0;
+        $ledger_id = isset($_POST['ledger_id']) ? (int) $_POST['ledger_id'] : 0;
+
+        if ($blog_id <= 0 || $ledger_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu thông tin blog_id hoặc ledger_id']);
+        }
+
+        try {
+            switch_to_blog($blog_id);
+            global $wpdb;
+
+            // Debug log
+            error_log("get_sales_detail: blog_id=$blog_id, ledger_id=$ledger_id, prefix={$wpdb->prefix}");
+
+            // Lấy thông tin phiếu bán
+            $query = $wpdb->prepare(
+                "SELECT * FROM {$wpdb->prefix}local_ledger WHERE local_ledger_id = %d AND local_ledger_type IN (1, 10)",
+                $ledger_id
+            );
+            error_log("get_sales_detail: query=$query");
+
+            $ledger = $wpdb->get_row($query, ARRAY_A);
+
+            error_log("get_sales_detail: ledger found=" . (!empty($ledger) ? 'YES' : 'NO'));
+
+            if (!$ledger) {
+                restore_current_blog();
+                wp_send_json_error(['message' => 'Không tìm thấy phiếu bán']);
+            }
+
+            // Parse local_ledger_item_id (lưu dạng JSON array: "[175,176]")
+            $item_ids = [];
+            if (!empty($ledger['local_ledger_item_id'])) {
+                $decoded = json_decode($ledger['local_ledger_item_id'], true);
+                if (is_array($decoded)) {
+                    $item_ids = array_map('intval', $decoded);
+                }
+            }
+
+            // Lấy danh sách items theo item_ids
+            $items = [];
+            if (!empty($item_ids)) {
+                $placeholders = implode(',', array_fill(0, count($item_ids), '%d'));
+                $items = $wpdb->get_results(
+                    $wpdb->prepare(
+                        "SELECT * FROM {$wpdb->prefix}local_ledger_item
+                        WHERE local_ledger_item_id IN ($placeholders)
+                        ORDER BY local_ledger_item_id ASC",
+                        ...$item_ids
+                    ),
+                    ARRAY_A
+                );
+            }
+
+            error_log("get_sales_detail: found " . count($items) . " items from IDs: " . json_encode($item_ids));
+
+            // Lấy thông tin khách hàng
+            $customer = null;
+            if (!empty($ledger['customer_id'])) {
+                $customer = $wpdb->get_row($wpdb->prepare(
+                    "SELECT * FROM {$wpdb->prefix}global_customer WHERE id = %d",
+                    $ledger['customer_id']
+                ), ARRAY_A);
+            }
+
+            // Lấy thông tin VAT nếu có
+            $vat_info = $wpdb->get_row($wpdb->prepare(
+                "SELECT * FROM {$wpdb->prefix}local_viettel_invoice
+                WHERE sale_ledger_id = %d
+                ORDER BY local_viettel_invoice_id DESC LIMIT 1",
+                $ledger_id
+            ), ARRAY_A);
+
+            // Lấy thông tin sản phẩm
+            $skus = array_column($items, 'sku');
+            $product_info = [];
+            if (!empty($skus)) {
+                error_log('get_sales_detail: Looking up products for SKUs: ' . json_encode($skus));
+                $placeholders = implode(',', array_fill(0, count($skus), '%s'));
+                $products = $wpdb->get_results(
+                    $wpdb->prepare(
+                        "SELECT sku, name FROM {$wpdb->prefix}global_product WHERE sku IN ($placeholders)",
+                        ...$skus
+                    ),
+                    ARRAY_A
+                );
+                error_log('get_sales_detail: Found ' . count($products) . ' products');
+                foreach ($products as $p) {
+                    $product_info[$p['sku']] = $p['name'];
+                }
+                error_log('get_sales_detail: product_info = ' . json_encode($product_info));
+            }
+
+            // Kiểm tra xem có phải Bill Z không
+            $is_bill_z = (substr($ledger['local_ledger_code'] ?? '', -1) === 'Z');
+
+            // Kiểm tra trạng thái VAT
+            $has_vat = !empty($vat_info['invoice_no']);
+            $vat_pending = !empty($vat_info) && empty($vat_info['invoice_no']);
+
+            // Quyết định có thể sửa phiếu không
+            $can_edit = false;
+            if ($is_bill_z) {
+                $can_edit = true; // Bill Z sửa thoải mái
+            } elseif (!$has_vat && !$vat_pending) {
+                $can_edit = true; // Chưa gửi VAT
+            }
+
+            restore_current_blog();
+
+            wp_send_json_success([
+                'ledger' => $ledger,
+                'items' => $items,
+                'customer' => $customer,
+                'vat_info' => $vat_info,
+                'product_info' => $product_info,
+                'is_bill_z' => $is_bill_z,
+                'has_vat' => $has_vat,
+                'can_edit' => $can_edit,
+            ]);
+
+        } catch (Exception $e) {
+            restore_current_blog();
+            wp_send_json_error(['message' => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Lấy chi tiết phiếu điều chỉnh giảm (return/hoàn hàng) để hiển thị trong modal
+     */
+    public static function get_adjustment_detail()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền xem báo cáo']);
+        }
+
+        $blog_id = isset($_POST['blog_id']) ? (int) $_POST['blog_id'] : 0;
+        $ledger_id = isset($_POST['ledger_id']) ? (int) $_POST['ledger_id'] : 0;
+
+        if ($blog_id <= 0 || $ledger_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu thông tin blog_id hoặc ledger_id']);
+        }
+
+        try {
+            switch_to_blog($blog_id);
+            global $wpdb;
+
+            // Lấy thông tin phiếu hoàn hàng
+            $ledger = $wpdb->get_row($wpdb->prepare(
+                "SELECT * FROM {$wpdb->prefix}local_ledger WHERE local_ledger_id = %d AND local_ledger_type = 11",
+                $ledger_id
+            ), ARRAY_A);
+
+            if (!$ledger) {
+                restore_current_blog();
+                wp_send_json_error(['message' => 'Không tìm thấy phiếu điều chỉnh']);
+            }
+
+            // Parse local_ledger_item_id (lưu dạng JSON array: "[175,176]")
+            $item_ids = [];
+            if (!empty($ledger['local_ledger_item_id'])) {
+                $decoded = json_decode($ledger['local_ledger_item_id'], true);
+                if (is_array($decoded)) {
+                    $item_ids = array_map('intval', $decoded);
+                }
+            }
+
+            // Lấy danh sách items theo item_ids
+            $items = [];
+            if (!empty($item_ids)) {
+                $placeholders = implode(',', array_fill(0, count($item_ids), '%d'));
+                $items = $wpdb->get_results(
+                    $wpdb->prepare(
+                        "SELECT * FROM {$wpdb->prefix}local_ledger_item
+                        WHERE local_ledger_item_id IN ($placeholders)
+                        ORDER BY local_ledger_item_id ASC",
+                        ...$item_ids
+                    ),
+                    ARRAY_A
+                );
+            }
+
+            // Lấy thông tin khách hàng
+            $customer = null;
+            if (!empty($ledger['customer_id'])) {
+                $customer = $wpdb->get_row($wpdb->prepare(
+                    "SELECT * FROM {$wpdb->prefix}global_customer WHERE id = %d",
+                    $ledger['customer_id']
+                ), ARRAY_A);
+            }
+
+            // Lấy thông tin VAT điều chỉnh nếu có
+            $vat_info = $wpdb->get_row($wpdb->prepare(
+                "SELECT * FROM {$wpdb->prefix}viettel_invoice_adjustment
+                WHERE return_ledger_id = %d
+                ORDER BY id DESC LIMIT 1",
+                $ledger_id
+            ), ARRAY_A);
+
+            // Lấy mã phiếu bán gốc từ bảng adjustment
+            $original_sale_code = null;
+            if ($vat_info && !empty($vat_info['sale_ledger_id'])) {
+                $original_ledger = $wpdb->get_row($wpdb->prepare(
+                    "SELECT local_ledger_code FROM {$wpdb->prefix}local_ledger WHERE local_ledger_id = %d",
+                    $vat_info['sale_ledger_id']
+                ), ARRAY_A);
+                if ($original_ledger) {
+                    $original_sale_code = $original_ledger['local_ledger_code'];
+                }
+            }
+
+            // Nếu không có bảng adjustment, thử tìm trong bảng invoice chính
+            if (!$vat_info) {
+                $vat_info = $wpdb->get_row($wpdb->prepare(
+                    "SELECT * FROM {$wpdb->prefix}viettel_invoice
+                    WHERE local_ledger_id = %d AND invoice_type = 'adjustment'
+                    ORDER BY id DESC LIMIT 1",
+                    $ledger_id
+                ), ARRAY_A);
+            }
+
+            // Lấy thông tin sản phẩm
+            $skus = array_column($items, 'sku');
+            $product_info = [];
+            if (!empty($skus)) {
+                error_log('get_adjustment_detail: Looking up products for SKUs: ' . json_encode($skus));
+                $placeholders = implode(',', array_fill(0, count($skus), '%s'));
+                $products = $wpdb->get_results(
+                    $wpdb->prepare(
+                        "SELECT sku, name FROM {$wpdb->prefix}global_product WHERE sku IN ($placeholders)",
+                        ...$skus
+                    ),
+                    ARRAY_A
+                );
+                error_log('get_adjustment_detail: Found ' . count($products) . ' products');
+                foreach ($products as $p) {
+                    $product_info[$p['sku']] = $p['name'];
+                }
+                error_log('get_adjustment_detail: product_info = ' . json_encode($product_info));
+            }
+
+            // Kiểm tra xem có phải Bill Z không
+            $is_bill_z = (substr($ledger['local_ledger_code'] ?? '', -1) === 'Z');
+
+            // Kiểm tra trạng thái VAT
+            $has_vat = !empty($vat_info['adjustment_invoice_no']) || !empty($vat_info['invoice_no']);
+            $vat_pending = !empty($vat_info) && !$has_vat;
+
+            // Quyết định có thể sửa phiếu không
+            $can_edit = false;
+            if ($is_bill_z) {
+                $can_edit = true; // Bill Z sửa thoải mái
+            } elseif (!$has_vat && !$vat_pending) {
+                $can_edit = true; // Chưa gửi VAT
+            }
+
+            restore_current_blog();
+
+            wp_send_json_success([
+                'ledger' => $ledger,
+                'items' => $items,
+                'customer' => $customer,
+                'vat_info' => $vat_info,
+                'product_info' => $product_info,
+                'is_bill_z' => $is_bill_z,
+                'has_vat' => $has_vat,
+                'can_edit' => $can_edit,
+                'original_sale_code' => $original_sale_code,
+            ]);
+        } catch (Exception $e) {
+            restore_current_blog();
+            wp_send_json_error(['message' => $e->getMessage()]);
+        }
     }
 }
 
