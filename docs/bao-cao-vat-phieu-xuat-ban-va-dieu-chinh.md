@@ -323,6 +323,10 @@ mua khác hẳn bên bán nên có **component modal riêng** `bctk-phieu-mua-mo
   (giống `build_purchase_rows()` — đây là giá vốn). Thuế lấy số đã lưu.
 - CHỈ ĐỌC + **sửa ghi chú** phiếu (ghi thẳng `local_ledger_note`, không tiền tố
   POS) + **Xuất Excel phiếu**. Không sửa dòng hàng.
+- Nút **"↗ Xem & sửa phiếu nhập kho"** mở trang chi tiết CŨ (đầy đủ Sửa phiếu /
+  Trình tự & Duyệt): `get_admin_url($blog_id, 'admin.php')` +
+  `?page=tgs-shop-management&view=ticket-import-v2-detail&id=<ledger id>` — payload
+  `detail_url`.
 
 Cách nối:
 - `site_purchase_rows` / `site_purchase_summary_rows` thêm

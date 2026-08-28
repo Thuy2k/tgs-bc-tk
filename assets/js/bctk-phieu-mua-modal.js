@@ -83,6 +83,7 @@
 
         +   '<div class="pm-toolbar">'
         +     '<div class="pm-actions" id="pmmActions">'
+        +       '<button type="button" class="bctk-btn bctk-btn--primary bctk-hidden" id="pmmOpenDetail">↗ Xem &amp; sửa phiếu nhập kho</button>'
         +       '<button type="button" class="bctk-btn" id="pmmExport">⭳ Xuất Excel phiếu</button>'
         +     '</div>'
         +     '<div class="pm-actions__msg" id="pmmMsg"></div>'
@@ -146,6 +147,12 @@
         $m.on('click', '[data-pmm-close]', function () { close(); });
         $m.on('click', '#pmmExport', exportPhieu);
         $m.on('click', '#pmmNoteEdit', startNoteEdit);
+        $m.on('click', '#pmmOpenDetail', function () {
+            if (current && current.detail_url) {
+                window.open(current.detail_url, '_blank', 'noopener');
+                api.toast('info', 'Đã mở trang chi tiết phiếu nhập ' + (current.so_phieu || '') + ' ở tab mới.');
+            }
+        });
         $(document).on('keydown', function (e) {
             if (e.key === 'Escape' && !$m.hasClass('bctk-hidden')) { close(); }
         });
@@ -233,6 +240,7 @@
 
     function renderAll(r) {
         $('#pmmCode').text(r.so_phieu ? '· ' + r.so_phieu : '');
+        $('#pmmOpenDetail').toggleClass('bctk-hidden', !r.detail_url);
         renderDoc(r);
         renderLines(r);
         renderFoot(r);

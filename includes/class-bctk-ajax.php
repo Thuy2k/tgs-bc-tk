@@ -2137,9 +2137,19 @@ class TGS_BCTK_Ajax
             $grand         += $total;
         }
 
+        /*
+         * Trang chi tiết phiếu nhập CŨ (đầy đủ: Sửa phiếu, Trình tự & Duyệt…).
+         * Nằm ở site của shop — get_admin_url theo blog_id, nhận ?id = ledger id.
+         */
+        $detail_url = add_query_arg(
+            ['page' => 'tgs-shop-management', 'view' => 'ticket-import-v2-detail', 'id' => $import_id],
+            get_admin_url($blog_id, 'admin.php')
+        );
+
         return [
             'blog_id'        => $blog_id,
             'import_id'      => $import_id,
+            'detail_url'     => $detail_url,
             'so_phieu'       => (string) $head['local_ledger_code'],
             'ngay_ct'        => (string) $head['created_at'],
             'han_tt'         => self::clean_datetime($head['han_tt']),
