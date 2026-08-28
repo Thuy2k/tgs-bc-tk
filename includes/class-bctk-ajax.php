@@ -1379,23 +1379,12 @@ class TGS_BCTK_Ajax
 
         $rows = $wpdb->get_results($sql, ARRAY_A);
 
-        // Debug: Log số dòng tìm được
-        error_log("VAT Sales: Found " . count($rows) . " ledgers for blog_id={$blog_id}, date={$from} to {$to}");
-
-        // Debug: Log dòng đầu tiên để xem cấu trúc
-        if (!empty($rows)) {
-            error_log("VAT Sales: First row sample - local_ledger_id=" . $rows[0]['local_ledger_id'] .
-                ", local_ledger_type=" . ($rows[0]['local_ledger_type'] ?? 'NULL') .
-                ", code=" . $rows[0]['local_ledger_code']);
-        }
-
         if (empty($rows)) {
             return ['rows' => [], 'site' => $site];
         }
 
         // Tính toán tiền theo đúng luồng local_ledger_item
         if (!self::money_ready()) {
-            error_log("VAT Sales: TGS_Money class not ready!");
             return ['rows' => [], 'site' => $site];
         }
 
@@ -1513,8 +1502,6 @@ class TGS_BCTK_Ajax
 
             $result_rows[] = $row;
         }
-
-        error_log("VAT Sales: Returning " . count($result_rows) . " processed rows");
 
         return ['rows' => $result_rows, 'site' => $site];
     }
@@ -1817,19 +1804,11 @@ class TGS_BCTK_Ajax
             switch_to_blog($blog_id);
             global $wpdb;
 
-            // Debug log
-            error_log("get_sales_detail: blog_id=$blog_id, ledger_id=$ledger_id, prefix={$wpdb->prefix}");
-
             // Lấy thông tin phiếu bán
-            $query = $wpdb->prepare(
+            $ledger = $wpdb->get_row($wpdb->prepare(
                 "SELECT * FROM {$wpdb->prefix}local_ledger WHERE local_ledger_id = %d AND local_ledger_type IN (1, 10)",
                 $ledger_id
-            );
-            error_log("get_sales_detail: query=$query");
-
-            $ledger = $wpdb->get_row($query, ARRAY_A);
-
-            error_log("get_sales_detail: ledger found=" . (!empty($ledger) ? 'YES' : 'NO'));
+            ), ARRAY_A);
 
             if (!$ledger) {
                 restore_current_blog();
@@ -1860,13 +1839,6 @@ class TGS_BCTK_Ajax
                 );
             }
 
-            error_log("get_sales_detail: found " . count($items) . " items from IDs: " . json_encode($item_ids));
-
-            // Debug: log sample item
-            if (!empty($items)) {
-                error_log("get_sales_detail: first item = " . json_encode($items[0]));
-            }
-
             // Lấy thông tin khách hàng
             $customer = null;
             if (!empty($ledger['customer_id'])) {
@@ -1884,14 +1856,11 @@ class TGS_BCTK_Ajax
                 $ledger_id
             ), ARRAY_A);
 
-            // Lấy thông tin sản phẩm từ bảng global_product_name (không phải global_product)
+            // Lấy thông tin sản phẩm từ bảng global_product_name
             $skus = array_column($items, 'local_product_sku');
             $product_info = [];
             if (!empty($skus)) {
-                error_log('get_sales_detail: Looking up products for SKUs: ' . json_encode($skus));
                 $placeholders = implode(',', array_fill(0, count($skus), '%s'));
-
-                // Bảng đúng là global_product_name, không phải global_product
                 global $wpdb;
                 $global_table = $wpdb->base_prefix . 'global_product_name';
 
@@ -1904,11 +1873,9 @@ class TGS_BCTK_Ajax
                     ),
                     ARRAY_A
                 );
-                error_log('get_sales_detail: Found ' . count($products) . ' products from ' . $global_table);
                 foreach ($products as $p) {
                     $product_info[$p['sku']] = $p['name'];
                 }
-                error_log('get_sales_detail: product_info = ' . json_encode($product_info));
             }
 
             // Kiểm tra xem có phải Bill Z không
@@ -2124,9 +2091,6 @@ class TGS_BCTK_Ajax
             switch_to_blog($blog_id);
         }
 
-        // Debug log
-        error_log("preview_sales_pdf: blog_id=$blog_id, ledger_id=$ledger_id, current_blog=" . get_current_blog_id());
-
         if (!function_exists('tgs_viettel_invoice')) {
             if ($blog_id > 0) restore_current_blog();
             wp_send_json_error(['message' => 'Plugin tgs-viettel-invoice chưa được kích hoạt']);
@@ -2135,22 +2099,14 @@ class TGS_BCTK_Ajax
         global $wpdb;
         $table_name = $wpdb->prefix . 'local_viettel_invoice';
 
-        error_log("preview_sales_pdf: table_name = $table_name, wpdb->prefix = " . $wpdb->prefix);
-
-        $query = $wpdb->prepare(
+        $vat_info = $wpdb->get_row($wpdb->prepare(
             "SELECT local_viettel_invoice_id, sale_ledger_id, local_ledger_code, invoice_state, template_code, issue_response_payload
              FROM $table_name
              WHERE sale_ledger_id = %d
              ORDER BY local_viettel_invoice_id DESC
              LIMIT 1",
             $ledger_id
-        );
-
-        error_log("preview_sales_pdf: query = $query");
-
-        $vat_info = $wpdb->get_row($query, ARRAY_A);
-
-        error_log("preview_sales_pdf: vat_info = " . print_r($vat_info, true));
+        ), ARRAY_A);
 
         if (!$vat_info) {
             if ($blog_id > 0) restore_current_blog();
