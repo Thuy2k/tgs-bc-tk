@@ -266,13 +266,18 @@ $bctk_vat_shop_count = count($bctk_vat_blog_ids);
             }
 
             // Load chi tiết qua AJAX (dùng return_ledger_id thay vì sale_ledger_id)
-            $.post('<?php echo admin_url('admin-ajax.php'); ?>', {
+            $.post("<?php echo admin_url('admin-ajax.php'); ?>", {
                 action: 'tgs_bctk_get_adjustment_detail',
                 nonce: '<?php echo wp_create_nonce(TGS_BCTK_Ajax::NONCE); ?>',
                 blog_id: row.blog_id || <?php echo get_current_blog_id(); ?>,
                 ledger_id: row.return_ledger_id
             }).then(function(res) {
                 if (res.success && res.data) {
+                    // Lưu thông tin để dùng cho PDF
+                    window.currentLedgerData = res.data;
+                    window.currentLedgerId = row.return_ledger_id;
+                    window.currentBlogId = row.blog_id || <?php echo get_current_blog_id(); ?>;
+
                     renderDetailModal(res.data);
                     // Dùng Bootstrap 5 API
                     var bsModal = new bootstrap.Modal(modal);
@@ -456,6 +461,67 @@ $bctk_vat_shop_count = count($bctk_vat_blog_ids);
             $('#bctkDetailPrintBtn').show();
             $('#bctkDetailPdfBtn').toggle(hasVat);
         }
+
+        // Gán event handler cho nút Xem PDF (sử dụng event delegation)
+        $(document).off('click', '#bctkDetailPdfBtn').on('click', '#bctkDetailPdfBtn', function() {
+            console.log('Adjustment PDF button clicked!');
+
+            var pdfModal = document.getElementById('bctkPdfModal');
+            if (!pdfModal) {
+                alert('PDF modal chưa được khởi tạo');
+                return;
+            }
+
+            // Hiển thị loading
+            $('#bctkPdfModalContent').html('<div class="text-center py-5"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Đang tải PDF...</span></div><p class="mt-3">Đang lấy file PDF từ Viettel...</p></div>');
+
+            // Mở modal
+            var bsPdfModal = new bootstrap.Modal(pdfModal);
+            bsPdfModal.show();
+
+            // Debug log
+            console.log('Adjustment PDF button clicked - currentLedgerId:', window.currentLedgerId);
+            console.log('Adjustment PDF button clicked - currentBlogId:', window.currentBlogId);
+            console.log('Adjustment PDF button clicked - currentLedgerData:', window.currentLedgerData);
+
+            if (!window.currentLedgerId) {
+                alert('Không tìm thấy ID phiếu. Vui lòng đóng modal và thử lại.');
+                return;
+            }
+
+            // Gọi AJAX để lấy PDF
+            $.ajax({
+                url: "<?php echo admin_url('admin-ajax.php'); ?>",
+                type: 'POST',
+                data: {
+                    action: 'tgs_bctk_preview_adjustment_pdf',
+                    nonce: '<?php echo wp_create_nonce(TGS_BCTK_Ajax::NONCE); ?>',
+                    blog_id: window.currentBlogId || <?php echo get_current_blog_id(); ?>,
+                    ledger_id: window.currentLedgerId
+                },
+                success: function(res) {
+                    console.log('AJAX response:', res);
+                    if (res.success && res.data && res.data.file_bytes_base64) {
+                        var base64 = res.data.file_bytes_base64;
+                        var pdfDataUrl = 'data:application/pdf;base64,' + base64;
+                        var fileName = res.data.file_name || 'adjustment_invoice.pdf';
+
+                        var pdfHtml = '<div class="pdf-viewer-container">';
+                        pdfHtml += '<div class="mb-3"><strong>File:</strong> ' + esc(fileName) + '</div>';
+                        pdfHtml += '<iframe src="' + pdfDataUrl + '" style="width:100%; height:70vh; border:1px solid #ddd;"></iframe>';
+                        pdfHtml += '</div>';
+
+                        $('#bctkPdfModalContent').html(pdfHtml);
+                    } else {
+                        var errorMsg = (res.data && res.data.message) ? res.data.message : 'Không thể tải file PDF';
+                        $('#bctkPdfModalContent').html('<div class="alert alert-danger"><i class="bx bx-error"></i> ' + esc(errorMsg) + '</div>');
+                    }
+                },
+                error: function() {
+                    $('#bctkPdfModalContent').html('<div class="alert alert-danger"><i class="bx bx-error"></i> Lỗi kết nối khi tải PDF</div>');
+                }
+            });
+        });
     });
 </script>
 
@@ -487,3 +553,24 @@ $bctk_vat_shop_count = count($bctk_vat_blog_ids);
     </div>
 </div>
 
+<!-- Modal xem PDF hóa đơn điều chỉnh -->
+<div class="modal fade" id="bctkPdfModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Xem PDF hóa đơn điều chỉnh</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Đóng"></button>
+            </div>
+            <div class="modal-body" id="bctkPdfModalContent">
+                <div class="text-center py-5">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Đang tải...</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Đóng</button>
+            </div>
+        </div>
+    </div>
+</div>

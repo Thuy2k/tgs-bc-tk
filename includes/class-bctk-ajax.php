@@ -173,6 +173,8 @@ class TGS_BCTK_Ajax
         add_action('wp_ajax_tgs_bctk_fetch_vat_adjustment', [__CLASS__, 'fetch_vat_adjustment']);
         add_action('wp_ajax_tgs_bctk_get_sales_detail', [__CLASS__, 'get_sales_detail']);
         add_action('wp_ajax_tgs_bctk_get_adjustment_detail', [__CLASS__, 'get_adjustment_detail']);
+        add_action('wp_ajax_tgs_bctk_preview_sales_pdf', [__CLASS__, 'preview_sales_pdf']);
+        add_action('wp_ajax_tgs_bctk_preview_adjustment_pdf', [__CLASS__, 'preview_adjustment_pdf']);
     }
 
     /** Sổ chăm sóc khách hàng — mỗi lượt một site, giống các báo cáo khác */
@@ -2098,6 +2100,315 @@ class TGS_BCTK_Ajax
             restore_current_blog();
             wp_send_json_error(['message' => $e->getMessage()]);
         }
+    }
+
+    /**
+     * Xem PDF hóa đơn bán hàng - tự implement dựa theo plugin Viettel
+     */
+    public static function preview_sales_pdf()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền xem PDF']);
+        }
+
+        $blog_id = isset($_POST['blog_id']) ? (int) $_POST['blog_id'] : 0;
+        $ledger_id = isset($_POST['ledger_id']) ? (int) $_POST['ledger_id'] : 0;
+
+        if ($ledger_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu ledger_id']);
+        }
+
+        if ($blog_id > 0) {
+            switch_to_blog($blog_id);
+        }
+
+        // Debug log
+        error_log("preview_sales_pdf: blog_id=$blog_id, ledger_id=$ledger_id, current_blog=" . get_current_blog_id());
+
+        if (!function_exists('tgs_viettel_invoice')) {
+            if ($blog_id > 0) restore_current_blog();
+            wp_send_json_error(['message' => 'Plugin tgs-viettel-invoice chưa được kích hoạt']);
+        }
+
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'local_viettel_invoice';
+
+        error_log("preview_sales_pdf: table_name = $table_name, wpdb->prefix = " . $wpdb->prefix);
+
+        $query = $wpdb->prepare(
+            "SELECT local_viettel_invoice_id, sale_ledger_id, local_ledger_code, invoice_state, template_code, issue_response_payload
+             FROM $table_name
+             WHERE sale_ledger_id = %d
+             ORDER BY local_viettel_invoice_id DESC
+             LIMIT 1",
+            $ledger_id
+        );
+
+        error_log("preview_sales_pdf: query = $query");
+
+        $vat_info = $wpdb->get_row($query, ARRAY_A);
+
+        error_log("preview_sales_pdf: vat_info = " . print_r($vat_info, true));
+
+        if (!$vat_info) {
+            if ($blog_id > 0) restore_current_blog();
+            wp_send_json_error(['message' => 'Không tìm thấy hóa đơn Viettel của đơn này']);
+        }
+
+        if (($vat_info['invoice_state'] ?? '') !== 'done') {
+            if ($blog_id > 0) restore_current_blog();
+            wp_send_json_error(['message' => 'Chỉ xem PDF cho hóa đơn đã gửi CQT thành công']);
+        }
+
+        // Parse invoice_no từ issue_response_payload
+        $invoice_no = '';
+        $payload_json = $vat_info['issue_response_payload'] ?? '';
+        if (!empty($payload_json)) {
+            $payload = json_decode($payload_json, true);
+            $invoice_no = $payload['result']['invoiceNo'] ?? '';
+        }
+
+        if (empty($invoice_no)) {
+            if ($blog_id > 0) restore_current_blog();
+            wp_send_json_error(['message' => 'Không lấy được invoiceNo để tải file PDF']);
+        }
+
+        $template_code = $vat_info['template_code'] ?? '1/770';
+        $plugin = tgs_viettel_invoice();
+        $settings = $plugin::get_settings_for_invoice(intval($vat_info['local_viettel_invoice_id'] ?? 0));
+        $supplier_tax_code = $settings['supplier_tax_code'] ?? '';
+
+        if (empty($supplier_tax_code)) {
+            if ($blog_id > 0) restore_current_blog();
+            wp_send_json_error(['message' => 'Thiếu MST nhà cung cấp trong cấu hình Viettel']);
+        }
+
+        // Gọi API Viettel trực tiếp thay vì dùng private method
+        $base = untrailingslashit($settings['api_base_url'] ?? '');
+        if (empty($base)) {
+            if ($blog_id > 0) restore_current_blog();
+            wp_send_json_error(['message' => 'Thiếu api_base_url trong cấu hình Viettel']);
+        }
+
+        $url = $base . '/InvoiceAPI/InvoiceUtilsWS/getInvoiceRepresentationFile';
+        $headers = [
+            'Content-Type' => 'application/json',
+            'Connection'   => 'keep-alive',
+        ];
+
+        if (($settings['auth_mode'] ?? 'basic') === 'token') {
+            $headers['Authorization'] = 'Bearer ' . ($settings['access_token'] ?? '');
+        } else {
+            $token = base64_encode(($settings['username'] ?? '') . ':' . ($settings['password'] ?? ''));
+            $headers['Authorization'] = 'Basic ' . $token;
+        }
+
+        $payload = [
+            'supplierTaxCode' => $supplier_tax_code,
+            'invoiceNo' => $invoice_no,
+            'templateCode' => $template_code,
+            'fileType' => 'PDF',
+        ];
+
+        $response = wp_remote_post($url, [
+            'headers' => $headers,
+            'body' => wp_json_encode($payload, JSON_UNESCAPED_UNICODE),
+            'timeout' => 60,
+            'httpversion' => '1.1',
+            'sslverify' => !empty($settings['verify_ssl']),
+        ]);
+
+        if (is_wp_error($response)) {
+            if ($blog_id > 0) restore_current_blog();
+            wp_send_json_error(['message' => 'Lỗi kết nối: ' . $response->get_error_message()]);
+        }
+
+        $http_code = intval(wp_remote_retrieve_response_code($response));
+        $response_text = wp_remote_retrieve_body($response);
+        $decoded = json_decode($response_text, true);
+
+        if ($http_code < 200 || $http_code >= 300 || !is_array($decoded)) {
+            if ($blog_id > 0) restore_current_blog();
+            wp_send_json_error([
+                'message' => 'Lấy file hóa đơn thất bại (HTTP ' . $http_code . ')',
+                'http_code' => $http_code
+            ]);
+        }
+
+        $file_bytes = $decoded['fileToBytes'] ?? '';
+        if (empty($file_bytes)) {
+            if ($blog_id > 0) restore_current_blog();
+            wp_send_json_error([
+                'message' => $decoded['description'] ?? $decoded['message'] ?? 'API không trả về fileToBytes',
+                'http_code' => $http_code
+            ]);
+        }
+
+        $safe_invoice_no = preg_replace('/[^A-Za-z0-9\-_]/', '_', $invoice_no);
+        $file_name = $supplier_tax_code . '-' . $safe_invoice_no . '.pdf';
+
+        if ($blog_id > 0) restore_current_blog();
+
+        wp_send_json_success([
+            'message' => 'Đã lấy file PDF hóa đơn thành công',
+            'sale_ledger_id' => $ledger_id,
+            'invoice_no' => $invoice_no,
+            'file_name' => $file_name,
+            'mime_type' => 'application/pdf',
+            'file_bytes_base64' => $file_bytes,
+            'api_http_code' => $pdf_result['http_code'] ?? 0
+        ]);
+    }
+
+    /**
+     * Xem PDF hóa đơn điều chỉnh - tự implement dựa theo plugin Viettel
+     */
+    public static function preview_adjustment_pdf()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền xem PDF']);
+        }
+
+        $blog_id = isset($_POST['blog_id']) ? (int) $_POST['blog_id'] : 0;
+        $ledger_id = isset($_POST['ledger_id']) ? (int) $_POST['ledger_id'] : 0;
+
+        if ($ledger_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu ledger_id']);
+        }
+
+        if ($blog_id > 0) {
+            switch_to_blog($blog_id);
+        }
+
+        if (!function_exists('tgs_viettel_invoice')) {
+            if ($blog_id > 0) restore_current_blog();
+            wp_send_json_error(['message' => 'Plugin tgs-viettel-invoice chưa được kích hoạt']);
+        }
+
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'local_viettel_invoice_adjustment';
+
+        $vat_info = $wpdb->get_row($wpdb->prepare(
+            "SELECT local_viettel_invoice_adjustment_id, return_ledger_id, local_ledger_code, adjustment_status, template_code, adjustment_issue_response_payload
+             FROM $table_name
+             WHERE return_ledger_id = %d
+             ORDER BY local_viettel_invoice_adjustment_id DESC
+             LIMIT 1",
+            $ledger_id
+        ), ARRAY_A);
+
+        if (!$vat_info) {
+            if ($blog_id > 0) restore_current_blog();
+            wp_send_json_error(['message' => 'Không tìm thấy hóa đơn điều chỉnh Viettel của đơn này']);
+        }
+
+        if (($vat_info['adjustment_status'] ?? '') !== 'done') {
+            if ($blog_id > 0) restore_current_blog();
+            wp_send_json_error(['message' => 'Chỉ xem PDF cho hóa đơn điều chỉnh đã gửi CQT thành công']);
+        }
+
+        // Parse invoice_no từ adjustment_issue_response_payload
+        $invoice_no = '';
+        $payload_json = $vat_info['adjustment_issue_response_payload'] ?? '';
+        if (!empty($payload_json)) {
+            $payload = json_decode($payload_json, true);
+            $invoice_no = $payload['result']['invoiceNo'] ?? '';
+        }
+
+        if (empty($invoice_no)) {
+            if ($blog_id > 0) restore_current_blog();
+            wp_send_json_error(['message' => 'Không lấy được invoiceNo điều chỉnh để tải file PDF']);
+        }
+
+        $template_code = $vat_info['template_code'] ?? '1/770';
+        $plugin = tgs_viettel_invoice();
+        $settings = $plugin::get_settings_for_invoice(intval($vat_info['local_viettel_invoice_adjustment_id'] ?? 0));
+        $supplier_tax_code = $settings['supplier_tax_code'] ?? '';
+
+        if (empty($supplier_tax_code)) {
+            if ($blog_id > 0) restore_current_blog();
+            wp_send_json_error(['message' => 'Thiếu MST nhà cung cấp trong cấu hình Viettel']);
+        }
+
+        // Gọi API Viettel trực tiếp
+        $base = untrailingslashit($settings['api_base_url'] ?? '');
+        if (empty($base)) {
+            if ($blog_id > 0) restore_current_blog();
+            wp_send_json_error(['message' => 'Thiếu api_base_url trong cấu hình Viettel']);
+        }
+
+        $url = $base . '/InvoiceAPI/InvoiceUtilsWS/getInvoiceRepresentationFile';
+        $headers = [
+            'Content-Type' => 'application/json',
+            'Connection'   => 'keep-alive',
+        ];
+
+        if (($settings['auth_mode'] ?? 'basic') === 'token') {
+            $headers['Authorization'] = 'Bearer ' . ($settings['access_token'] ?? '');
+        } else {
+            $token = base64_encode(($settings['username'] ?? '') . ':' . ($settings['password'] ?? ''));
+            $headers['Authorization'] = 'Basic ' . $token;
+        }
+
+        $payload = [
+            'supplierTaxCode' => $supplier_tax_code,
+            'invoiceNo' => $invoice_no,
+            'templateCode' => $template_code,
+            'fileType' => 'PDF',
+        ];
+
+        $response = wp_remote_post($url, [
+            'headers' => $headers,
+            'body' => wp_json_encode($payload, JSON_UNESCAPED_UNICODE),
+            'timeout' => 60,
+            'httpversion' => '1.1',
+            'sslverify' => !empty($settings['verify_ssl']),
+        ]);
+
+        if (is_wp_error($response)) {
+            if ($blog_id > 0) restore_current_blog();
+            wp_send_json_error(['message' => 'Lỗi kết nối: ' . $response->get_error_message()]);
+        }
+
+        $http_code = intval(wp_remote_retrieve_response_code($response));
+        $response_text = wp_remote_retrieve_body($response);
+        $decoded = json_decode($response_text, true);
+
+        if ($http_code < 200 || $http_code >= 300 || !is_array($decoded)) {
+            if ($blog_id > 0) restore_current_blog();
+            wp_send_json_error([
+                'message' => 'Lấy file hóa đơn điều chỉnh thất bại (HTTP ' . $http_code . ')',
+                'http_code' => $http_code
+            ]);
+        }
+
+        $file_bytes = $decoded['fileToBytes'] ?? '';
+        if (empty($file_bytes)) {
+            if ($blog_id > 0) restore_current_blog();
+            wp_send_json_error([
+                'message' => $decoded['description'] ?? $decoded['message'] ?? 'API không trả về fileToBytes',
+                'http_code' => $http_code
+            ]);
+        }
+
+        $safe_invoice_no = preg_replace('/[^A-Za-z0-9\-_]/', '_', $invoice_no);
+        $file_name = $supplier_tax_code . '-' . $safe_invoice_no . '.pdf';
+
+        if ($blog_id > 0) restore_current_blog();
+
+        wp_send_json_success([
+            'message' => 'Đã lấy file PDF hóa đơn điều chỉnh thành công',
+            'return_ledger_id' => $ledger_id,
+            'invoice_no' => $invoice_no,
+            'file_name' => $file_name,
+            'mime_type' => 'application/pdf',
+            'file_bytes_base64' => $file_bytes,
+            'api_http_code' => $pdf_result['http_code'] ?? 0
+        ]);
     }
 }
 
