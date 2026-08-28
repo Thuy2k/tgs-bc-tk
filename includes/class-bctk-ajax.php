@@ -1507,6 +1507,12 @@ class TGS_BCTK_Ajax
             'sale_id'    => (int) ($r['sale_id'] ?? 0),
             'is_z'       => (int) ($r['is_z'] ?? 0),
             'has_vat'    => $has_vat ? 1 : 0,
+            /*
+             * Phiếu bán đã có phiếu hoàn con (hoàn một phần / toàn phần,
+             * local_ledger_type = 11 trỏ về phiếu này). Khi đó KHÓA sửa dòng
+             * hàng (số liệu đã bị phiếu hoàn tham chiếu) — ghi chú vẫn sửa được.
+             */
+            'has_return' => (int) ($r['has_return'] ?? 0) > 0 ? 1 : 0,
             'vat_state'  => $vat_state,
             'invoice_no' => $so_hd,
             'queue_status' => (string) ($r['queue_status'] ?? ''),
@@ -1517,6 +1523,11 @@ class TGS_BCTK_Ajax
              * bấm hành động "chưa phát hành" là mở tab này.
              */
             'pos_tax_url' => get_home_url((int) $r['_blog_id'], '/pos-viettel-tax/'),
+            /*
+             * Màn "Lịch sử đơn hàng" của chính shop — nút "Hoàn hàng" mở tab này
+             * và bung sẵn đúng đơn (deep-link ?open_code=&open_date=).
+             */
+            'pos_orders_url' => get_home_url((int) $r['_blog_id'], '/pos-orders/'),
             'items'      => $items,
         ];
     }
@@ -1810,7 +1821,7 @@ class TGS_BCTK_Ajax
      *
      * @return array{sale: array, export_id: int}
      */
-    private static function vat_edit_context($blog_id, $sale_id, &$switched)
+    private static function vat_edit_context($blog_id, $sale_id, &$switched, $block_if_returned = false)
     {
         $blog_id = (int) $blog_id;
         $sale_id = (int) $sale_id;
@@ -1868,6 +1879,26 @@ class TGS_BCTK_Ajax
             }
         }
 
+        /*
+         * Đã có phiếu hoàn con (hoàn một phần / toàn phần, type 11 trỏ về phiếu
+         * bán này) → KHÓA sửa dòng hàng: số liệu dòng đã bị phiếu hoàn tham
+         * chiếu, sửa tiếp sẽ lệch. Ghi chú thì vẫn cho ($block_if_returned = false).
+         */
+        if ($block_if_returned) {
+            $ret = (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$L}
+                  WHERE local_ledger_parent_id = %d AND local_ledger_type = 11
+                    AND (is_deleted = 0 OR is_deleted IS NULL)",
+                $sale_id
+            ));
+            if ($ret > 0) {
+                wp_send_json_error([
+                    'message' => 'Phiếu đã có phiếu hoàn con — không sửa dòng hàng được nữa. '
+                        . 'Chỉ sửa được ghi chú.',
+                ], 409);
+            }
+        }
+
         // Phiếu xuất con (type 2, cha = phiếu bán) — nơi dòng hàng thật sự nằm
         $export_id = (int) $wpdb->get_var($wpdb->prepare(
             "SELECT local_ledger_id FROM {$L}
@@ -1920,7 +1951,7 @@ class TGS_BCTK_Ajax
         }, $lines), $report_blog);
 
         $switched = false;
-        $ctx = self::vat_edit_context($blog_id, $sale_id, $switched);
+        $ctx = self::vat_edit_context($blog_id, $sale_id, $switched, true);
 
         try {
             global $wpdb;

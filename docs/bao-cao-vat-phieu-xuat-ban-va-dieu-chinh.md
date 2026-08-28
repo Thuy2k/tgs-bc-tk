@@ -176,12 +176,21 @@ kiếm" lại để cập nhật báo cáo.
 | Chưa phát hành / bill Z | **Sửa phiếu ↗** | mở màn DS Gửi Thuế của shop |
 | Chưa phát hành (không phải Z) | **Tách / chuyển bill Z ↗**, **Gửi hoá đơn thuế ↗** | mở màn DS Gửi Thuế của shop |
 | Gửi lỗi | **Gửi lại ↗** | mở màn DS Gửi Thuế của shop |
+| Mọi phiếu bán (không phải màn điều chỉnh) | **Hoàn hàng ↗** | mở màn "Lịch sử đơn hàng" của shop, bung sẵn đúng đơn |
 | Đã phát hành | **Xem PDF**, **Điều chỉnh**, **Thay thế** | PDF chạy thật; điều chỉnh/thay thế chờ chốt luồng |
+
+**"Hoàn hàng ↗"** mở `get_home_url($blog_id, '/pos-orders/')` (payload
+`pos_orders_url`) kèm `?open_code=<local_ledger_code>&open_date=<YYYY-MM-DD ngày
+xuất>`. `pos-orders.php` (`maybeDeepLinkOpenOrder()` trong `DOMContentLoaded`)
+đọc 2 tham số này → đặt khoảng ngày + lọc cột "Mã", `loadOrders()`, rồi
+`viewOrderDetail()` đúng đơn để kế toán bấm "Hoàn hàng" ngay trong đó. Luồng hoàn
+vẫn chạy native trên site shop.
 
 ### 6.2 SỬA DÒNG HÀNG trong modal (đã có)
 
 Nút **"✎ Sửa dòng hàng"** hiện khi phiếu là **bill Z** hoặc **CHƯA phát hành
-hoá đơn** (`vat_state` ∉ `done/issued`) và không phải màn điều chỉnh. Vào chế độ
+hoá đơn** (`vat_state` ∉ `done/issued`), **CHƯA có phiếu hoàn con** và không phải
+màn điều chỉnh. Vào chế độ
 sửa: mỗi cột sửa được thành ô nhập (Mã hàng · Tên hàng · ĐVT · SL · Đơn giá ·
 CK · Thuế suất · Số lô · EXP · Ghi chú), cột tiền cập nhật **tạm tính** ngay;
 **+ Thêm dòng**, nút **✕** xoá dòng; phím **↑ ↓ Enter** đi giữa các dòng cùng
@@ -191,6 +200,11 @@ cột (Enter ở dòng cuối = thêm dòng). Bấm **💾 Lưu** →
 1. `switch_to_blog` + đọc/ghi bảng theo `$wpdb->prefix` tươi (KHÔNG dùng
    `TGS_TABLE_*` — bám site tổng).
 2. Chặn nếu phiếu đã phát hành (trừ bill Z).
+   **Chặn (409) nếu phiếu đã có phiếu hoàn con** (`local_ledger_type = 11`,
+   `local_ledger_parent_id = phiếu bán`) — hoàn một phần / toàn phần thì số liệu
+   dòng đã bị phiếu hoàn tham chiếu, sửa tiếp sẽ lệch. Kiểm cả ở
+   `vat_edit_context($block_if_returned = true)` lẫn client. **Ghi chú vẫn sửa
+   được** (`vat_save_note` không bật cờ này).
 3. Mỗi dòng: quy `(SL, Đơn giá, CK)` — giá trị POS (sau thuế, trước CK) — về 5
    cột gốc bằng `TGS_Money::from_pos()` (thuế suất lấy như trên, không tin
    client); **UPDATE / INSERT / DELETE VĨNH VIỄN** (`$wpdb->delete`, không soft)

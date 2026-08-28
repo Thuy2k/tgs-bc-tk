@@ -1642,6 +1642,12 @@ class TGS_BCTK_Report
                 l.user_id              AS user_id,
                 l.local_ledger_item_id AS item_id_json,
                 par.local_ledger_code  AS parent_code,
+                (
+                    SELECT COUNT(*) FROM {$ledger_table} rc
+                    WHERE rc.local_ledger_parent_id = l.local_ledger_id
+                      AND rc.local_ledger_type = 11
+                      AND (rc.is_deleted = 0 OR rc.is_deleted IS NULL)
+                ) AS has_return,
                 COALESCE(u.display_name, u.user_login, '')          AS nv_ten,
                 COALESCE(pe.local_ledger_person_name, '')           AS kh_ten,
                 COALESCE(pe.local_ledger_person_phone, '')          AS kh_dt,

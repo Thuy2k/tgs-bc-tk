@@ -7,7 +7,11 @@
  *
  * Gọi:  TGSBctkPhieuModal.open(payload, {
  *          title, note, actions,
- *          editable:    bool,                     // cho phép Sửa dòng hàng
+ *          editable:      bool,   // cho phép Sửa GHI CHÚ (nút ✎ Sửa ghi chú)
+ *          editableLines: bool,   // cho phép Sửa DÒNG HÀNG (mặc định = editable
+ *                                 //   nếu bỏ trống). Đặt false khi phiếu đã có
+ *                                 //   phiếu hoàn con: chỉ sửa ghi chú.
+ *          lockLinesNote: string, // câu giải thích vì sao khoá dòng hàng
  *          onSaveLines: fn(payload, lines, api),  // lưu dòng hàng
  *          onSaveNote:  fn(payload, noteText, api)// lưu ghi chú phiếu
  *        })
@@ -225,7 +229,10 @@
                 + '" data-pm-action="' + esc(a.id) + '">' + esc(a.label) + '</button>';
         });
 
-        if (opts.editable && typeof opts.onSaveLines === 'function') {
+        // Cho sửa DÒNG HÀNG: ưu tiên cờ editableLines; nếu thiếu (component
+        // dùng ở màn khác) thì fallback về editable như trước.
+        var canLines = (typeof opts.editableLines === 'boolean' ? opts.editableLines : !!opts.editable);
+        if (canLines && typeof opts.onSaveLines === 'function') {
             if (editing) {
                 acts.push('<span class="pm-actions__sep"></span>');
                 acts.push('<button type="button" class="bctk-btn" id="pmEditAdd">+ Thêm dòng</button>');
@@ -238,6 +245,9 @@
 
         $('#pmActions').html(acts.join(''));
         $('#pmActionMsg').text('').removeAttr('data-type');
+        if (!editing && !canLines && opts.lockLinesNote) {
+            $('#pmActionMsg').text('🔒 ' + opts.lockLinesNote).attr('data-type', 'warn');
+        }
         $('#pmEditTag').toggleClass('bctk-hidden', !editing);
     }
 

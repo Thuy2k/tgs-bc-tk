@@ -180,6 +180,20 @@
             api.toast('info', 'Đã mở màn "DS Gửi Thuế" của shop ở tab mới — thao tác ở đó rồi bấm "Tìm kiếm" lại để cập nhật.');
         }
 
+        // "Hoàn hàng" → mở màn "Lịch sử đơn hàng" của shop, bung sẵn đúng đơn.
+        // tgs_pos đọc ?open_code + ?open_date để đặt bộ lọc rồi tự viewOrderDetail.
+        function openPosOrders(r, api) {
+            if (!r.pos_orders_url) {
+                api.toast('error', 'Không có đường dẫn màn Lịch sử đơn hàng của shop này.');
+                return;
+            }
+            var q = '?open_code=' + encodeURIComponent(r.so_phieu_xuat || '');
+            var ymd = /^(\d{4}-\d{2}-\d{2})/.exec(String(r.ngay_xuat || ''));
+            if (ymd) { q += '&open_date=' + encodeURIComponent(ymd[1]); }
+            window.open(r.pos_orders_url + q, '_blank', 'noopener');
+            api.toast('info', 'Đã mở "Lịch sử đơn hàng" của shop kèm đơn ' + (r.so_phieu_xuat || '') + ' ở tab mới.');
+        }
+
         function soon(name) {
             return function (r, api) {
                 api.toast('info', name + ' — đang phát triển, sẽ chốt luồng ở bước sau.');
@@ -208,9 +222,14 @@
                 .then(function () { api.busy(false); });
         }
 
-        // "Sửa được" = bill Z, hoặc chưa phát hành hoá đơn (không phải màn điều chỉnh)
+        // "Sửa được" (ghi chú) = bill Z, hoặc chưa phát hành hoá đơn (không phải màn điều chỉnh)
         function canEdit(r) {
             return !isAdjust && (Number(r.is_z) === 1 || !issued(r));
+        }
+        // "Sửa được DÒNG HÀNG" = như trên NHƯNG chưa có phiếu hoàn con.
+        // Đã hoàn một phần / toàn phần → khoá dòng hàng, ghi chú vẫn cho.
+        function canEditLines(r) {
+            return canEdit(r) && Number(r.has_return) !== 1;
         }
 
         var ACTIONS = [
@@ -233,6 +252,11 @@
                 id: 'resend', label: 'Gửi lại ↗',
                 when: function (r) { return errored(r); },
                 run: openPosTax
+            },
+            {
+                id: 'return', label: 'Hoàn hàng ↗',
+                when: function (r) { return !isAdjust && Number(r.sale_id) > 0; },
+                run: openPosOrders
             },
             {
                 id: 'adjust', label: 'Điều chỉnh',
@@ -321,7 +345,11 @@
                     ? 'Phiếu điều chỉnh giảm — số tiền mang dấu âm (phần khai giảm so với hoá đơn gốc). "Xem PDF hoá đơn" mở hoá đơn GỐC để đối chiếu.'
                     : '',
                 actions: ACTIONS,
-                editable: canEdit(r),
+                editable: canEdit(r),            // ghi chú
+                editableLines: canEditLines(r),  // dòng hàng (khoá nếu đã có phiếu hoàn con)
+                lockLinesNote: canEdit(r) && !canEditLines(r)
+                    ? 'Phiếu đã có phiếu hoàn con — chỉ sửa được ghi chú, không sửa dòng hàng.'
+                    : '',
                 onSaveLines: saveLines,
                 onSaveNote: saveNote,
                 onSearchProduct: searchProduct,

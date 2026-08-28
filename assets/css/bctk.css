@@ -587,6 +587,7 @@
 .pm-actions .bctk-btn { white-space: nowrap; }
 .pm-actions__msg { flex: 1 1 160px; font-size: 12px; color: #475569; }
 .pm-actions__msg[data-type="error"] { color: #b91c1c; }
+.pm-actions__msg[data-type="warn"] { color: #b45309; font-weight: 600; }
 .pm-toolbar__close { flex: 0 0 auto; margin-left: auto; }
 
 /* ── Chứng từ ── */
