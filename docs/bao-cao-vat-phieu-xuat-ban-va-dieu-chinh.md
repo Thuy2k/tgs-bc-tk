@@ -105,9 +105,10 @@ dựng DOM một lần, chia khối: `renderToolbar` · `renderDoc` · `renderLi
 `payload` (dòng đã dựng ở server) + mảng `actions` vào.
 
 **Bố cục bám PHẦN MỀM CŨ** (kế toán chạy song song hai phần mềm, tránh ngợp) —
-modal **full màn (100vw × 100vh)**, cao cố định — không co giãn theo nội dung để
-bố cục không nhảy. Lớp xem PDF (`.pm-pdf`) có `z-index: 20` để không bị tiêu đề
-bảng dòng hàng (thead sticky) xuyên qua:
+modal **gần full màn (98vw × 97vh)** — chừa khe hẹp quanh viền để thấy rõ là
+modal; cao cố định, không co giãn theo nội dung để bố cục không nhảy. Lớp xem
+PDF (`.pm-pdf`) có `z-index: 20` để không bị tiêu đề bảng dòng hàng (thead
+sticky) xuyên qua:
 
 | Vùng | Nội dung |
 |---|---|
