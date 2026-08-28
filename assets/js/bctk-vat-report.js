@@ -208,16 +208,16 @@
                 .then(function () { api.busy(false); });
         }
 
+        // "Sửa được" = bill Z, hoặc chưa phát hành hoá đơn (không phải màn điều chỉnh)
+        function canEdit(r) {
+            return !isAdjust && (Number(r.is_z) === 1 || !issued(r));
+        }
+
         var ACTIONS = [
             {
                 id: 'pdf', label: 'Xem PDF', cls: 'primary',
                 when: function (r) { return Number(r.sale_id) > 0 && (isAdjust || issued(r)); },
                 run: fetchPdf
-            },
-            {
-                id: 'edit', label: 'Sửa phiếu ↗',
-                when: function (r) { return r.is_z || notIssued(r); },
-                run: openPosTax
             },
             {
                 id: 'split', label: 'Tách / chuyển bill Z ↗',
@@ -246,6 +246,61 @@
             }
         ];
 
+        // ── Lưu dòng hàng đã sửa ──────────────────────────────────────────
+        function saveLines(r, lines, api) {
+            var fd = new FormData();
+            fd.append('action', 'tgs_bctk_vat_save_lines');
+            fd.append('nonce', (window.TGS_BCTK && window.TGS_BCTK.nonce) || '');
+            fd.append('blog_id', String(r.blog_id || ''));
+            fd.append('sale_id', String(r.sale_id || ''));
+            fd.append('lines', JSON.stringify(lines));
+
+            fetch(CFG.ajaxUrl, { method: 'POST', body: fd, credentials: 'same-origin' })
+                .then(function (res) { return res.json(); })
+                .then(function (out) {
+                    if (!out || !out.success) {
+                        throw new Error((out && out.data && out.data.message) || 'Không lưu được.');
+                    }
+                    api.applyRow(out.data.row || null);
+                    api.toast(out.data.warning ? 'error' : 'info',
+                        (out.data.message || 'Đã lưu.') + (out.data.warning ? ' ⚠ ' + out.data.warning : ''));
+                })
+                .catch(function (err) { api.toast('error', err.message || 'Không lưu được dòng hàng.'); })
+                .then(function () { api.busy(false); });
+        }
+
+        function searchProduct(term, cb) {
+            var fd = new FormData();
+            fd.append('action', 'tgs_bctk_product_search');
+            fd.append('nonce', (window.TGS_BCTK && window.TGS_BCTK.nonce) || '');
+            fd.append('q', String(term || ''));
+            fetch(CFG.ajaxUrl, { method: 'POST', body: fd, credentials: 'same-origin' })
+                .then(function (res) { return res.json(); })
+                .then(function (out) { cb((out && out.success && out.data.items) || []); })
+                .catch(function () { cb([]); });
+        }
+
+        function saveNote(r, noteText, api) {
+            var fd = new FormData();
+            fd.append('action', 'tgs_bctk_vat_save_note');
+            fd.append('nonce', (window.TGS_BCTK && window.TGS_BCTK.nonce) || '');
+            fd.append('blog_id', String(r.blog_id || ''));
+            fd.append('sale_id', String(r.sale_id || ''));
+            fd.append('note', String(noteText || ''));
+
+            fetch(CFG.ajaxUrl, { method: 'POST', body: fd, credentials: 'same-origin' })
+                .then(function (res) { return res.json(); })
+                .then(function (out) {
+                    if (!out || !out.success) {
+                        throw new Error((out && out.data && out.data.message) || 'Không lưu được.');
+                    }
+                    api.applyNote(out.data.ghi_chu || '');
+                    api.toast('info', out.data.message || 'Đã lưu ghi chú.');
+                })
+                .catch(function (err) { api.toast('error', err.message || 'Không lưu được ghi chú.'); })
+                .then(function () { api.busy(false); });
+        }
+
         $(document).on('click', '#bctkBody tr[data-i]', function () {
             var r = viewRows[parseInt(this.getAttribute('data-i'), 10)];
             if (!r || !window.TGSBctkPhieuModal) { return; }
@@ -254,7 +309,15 @@
                 note: isAdjust
                     ? 'Phiếu điều chỉnh giảm — số tiền mang dấu âm (phần khai giảm so với hoá đơn gốc). "Xem PDF hoá đơn" mở hoá đơn GỐC để đối chiếu.'
                     : '',
-                actions: ACTIONS
+                actions: ACTIONS,
+                editable: canEdit(r),
+                onSaveLines: saveLines,
+                onSaveNote: saveNote,
+                onSearchProduct: searchProduct,
+                /* Sau khi lưu: chạy lại tìm kiếm để bảng khớp với dữ liệu mới */
+                onRowUpdated: function () {
+                    if ($('.bctk-site:checked').length) { $(document).trigger('bctk:search'); }
+                }
             });
         });
     });

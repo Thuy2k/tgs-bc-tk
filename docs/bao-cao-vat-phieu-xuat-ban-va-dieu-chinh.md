@@ -178,13 +178,52 @@ kiếm" lại để cập nhật báo cáo.
 | Gửi lỗi | **Gửi lại ↗** | mở màn DS Gửi Thuế của shop |
 | Đã phát hành | **Xem PDF**, **Điều chỉnh**, **Thay thế** | PDF chạy thật; điều chỉnh/thay thế chờ chốt luồng |
 
-### 6.2 Việc còn phải làm
+### 6.2 SỬA DÒNG HÀNG trong modal (đã có)
 
-- **Làm luồng "chưa phát hành" chạy TRONG modal** thay vì mở tab — cần một
-  trong hai: (a) bc-tk proxy `switch_to_blog` + bản logic đọc bảng theo
-  `$wpdb->prefix` cho từng bước, hoặc (b) tgs_pos/tgs-viettel-invoice chuyển
-  hằng số bảng sang hàm động. Chờ chốt hướng.
-- **Điều chỉnh / thay thế hoá đơn** đã phát hành.
+Nút **"✎ Sửa dòng hàng"** hiện khi phiếu là **bill Z** hoặc **CHƯA phát hành
+hoá đơn** (`vat_state` ∉ `done/issued`) và không phải màn điều chỉnh. Vào chế độ
+sửa: mỗi cột sửa được thành ô nhập (Mã hàng · Tên hàng · ĐVT · SL · Đơn giá ·
+CK · Thuế suất · Số lô · EXP · Ghi chú), cột tiền cập nhật **tạm tính** ngay;
+**+ Thêm dòng**, nút **✕** xoá dòng; phím **↑ ↓ Enter** đi giữa các dòng cùng
+cột (Enter ở dòng cuối = thêm dòng). Bấm **💾 Lưu** →
+`tgs_bctk_vat_save_lines`:
+
+1. `switch_to_blog` + đọc/ghi bảng theo `$wpdb->prefix` tươi (KHÔNG dùng
+   `TGS_TABLE_*` — bám site tổng).
+2. Chặn nếu phiếu đã phát hành (trừ bill Z).
+3. Mỗi dòng: quy `(SL, Đơn giá, CK, Thuế suất)` — giá trị POS (sau thuế, trước
+   CK) — về 5 cột gốc bằng `TGS_Money::from_pos()`; UPDATE / INSERT / soft-DELETE
+   trên `local_ledger_item` của **phiếu xuất con** (type 2).
+4. Dựng lại `local_ledger_item_id` (JSON) + `local_ledger_total_amount` cho CẢ
+   phiếu bán (type 10) lẫn phiếu xuất con — tổng = `TGS_Money::total()['thanh_tien_dong']`.
+5. Đối chiếu tiền đã thu (phiếu thu type 7/8 đã duyệt); lệch ≥ 1đ → trả
+   **cảnh báo** để kế toán xử phiếu thu / công nợ.
+6. Trả về payload phiếu mới → modal cập nhật tại chỗ, bảng chạy lại tìm kiếm.
+
+**Ghi chú phiếu** có nút **"✎ Sửa ghi chú"** riêng (dưới, khối Nhân viên & ghi
+chú) → textarea → `tgs_bctk_vat_save_note` (lưu đúng định dạng POS
+`Đơn POS <mã> | Ghi chú: …`).
+
+> ⚠️ Chỉ đụng **dòng hàng + tổng tiền phiếu**. Tồn kho hệ thống này suy từ
+> chính `local_ledger_item` nên tự khớp. **Phiếu thu KHÔNG tự chỉnh** — đổi tổng
+> mà tiền đã thu khác thì có cảnh báo, kế toán xử tay.
+
+Component `bctk-phieu-modal.js` nhận `editable` + `onSaveLines` + `onSaveNote` →
+**các màn báo cáo khác** (bán hàng, mua hàng…) chỉ cần truyền callback tương tự
+là có ngay tính năng sửa.
+
+**Thêm dòng có gợi ý sản phẩm:** gõ vào ô **Mã hàng** hoặc **Tên hàng** (≥ 2 ký
+tự) → gợi ý từ catalog GLOBAL (`tgs_bctk_product_search` →
+`wp_global_product_name`, tìm theo sku / tên / barcode). Chọn (chuột hoặc ↓ ↑
+Enter) → tự điền sku · tên · ĐVT · đơn giá (nếu đang trống) · thuế suất (KCT
+hoặc %). Bảng global nên không cần `switch_to_blog`.
+
+### 6.3 Việc còn phải làm
+
+- Tự chỉnh **phiếu thu** khi tổng phiếu đổi (hiện chỉ cảnh báo).
+- **Gửi thuế / tách bill / gửi lại** chạy trong modal (hiện mở tab màn shop) —
+  cần proxy `switch_to_blog` gọi lại luồng tgs-viettel-invoice.
+- **Điều chỉnh / thay thế** hoá đơn đã phát hành.
 - Endpoint PDF riêng cho hoá đơn điều chỉnh giảm.
 - Luồng trạng thái cuối "được cơ quan thuế chấp nhận".
 

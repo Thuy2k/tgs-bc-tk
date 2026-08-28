@@ -1554,9 +1554,11 @@ class TGS_BCTK_Report
      * dòng hàng thô để phía AJAX tính tiền và dựng modal.
      *
      * @param string $bill_scope 'normal' (bỏ bill Z) | 'internal' (chỉ bill Z) | 'all'
+     * @param int[]  $sale_ids   Nếu truyền, chỉ lấy đúng các local_ledger_id này
+     *                           (dùng khi nạp lại MỘT phiếu sau khi sửa dòng).
      * @return array[] mỗi phần tử có khoá 'items' => array dòng hàng thô
      */
-    public static function site_vat_sales_rows($blog_id, $date_from, $date_to, $bill_scope = 'normal')
+    public static function site_vat_sales_rows($blog_id, $date_from, $date_to, $bill_scope = 'normal', array $sale_ids = [])
     {
         global $wpdb;
 
@@ -1583,6 +1585,16 @@ class TGS_BCTK_Report
         $SALE = 10;
         $from = $date_from . ' 00:00:00';
         $to   = $date_to . ' 23:59:59';
+
+        // Lọc đúng một/nhiều phiếu (nạp lại sau khi sửa dòng)
+        $sale_ids    = array_values(array_filter(array_map('intval', $sale_ids)));
+        $id_filter   = '';
+        $params_head = [];
+        if (!empty($sale_ids)) {
+            $id_filter = 'AND l.local_ledger_id IN ('
+                . implode(',', array_fill(0, count($sale_ids), '%d')) . ')';
+            $params_head = $sale_ids;
+        }
 
         $buyer_sql = self::buyer_meta_selects('mt');
 
@@ -1651,11 +1663,15 @@ class TGS_BCTK_Report
             WHERE l.local_ledger_type = {$SALE}
               AND (l.is_deleted = 0 OR l.is_deleted IS NULL)
               AND l.local_ledger_approver_status = {$A}
+              {$id_filter}
               AND l.created_at BETWEEN %s AND %s
             ORDER BY l.created_at DESC, l.local_ledger_code
         ";
 
-        $rows = $wpdb->get_results($wpdb->prepare($sql, $from, $to), ARRAY_A) ?: [];
+        $rows = $wpdb->get_results(
+            $wpdb->prepare($sql, array_merge($params_head, [$from, $to])),
+            ARRAY_A
+        ) ?: [];
         if (empty($rows)) {
             return [];
         }

@@ -83,6 +83,9 @@ class TGS_BCTK_Ajax
         add_action('wp_ajax_tgs_bctk_fetch_vat_sales', [__CLASS__, 'fetch_vat_sales']);
         add_action('wp_ajax_tgs_bctk_fetch_vat_adjust', [__CLASS__, 'fetch_vat_adjust']);
         add_action('wp_ajax_tgs_bctk_vat_pdf', [__CLASS__, 'vat_pdf']);
+        add_action('wp_ajax_tgs_bctk_vat_save_lines', [__CLASS__, 'vat_save_lines']);
+        add_action('wp_ajax_tgs_bctk_vat_save_note', [__CLASS__, 'vat_save_note']);
+        add_action('wp_ajax_tgs_bctk_product_search', [__CLASS__, 'product_search']);
         add_action('wp_ajax_tgs_bctk_refresh_nonce', [__CLASS__, 'refresh_nonce']);
     }
 
@@ -1780,6 +1783,356 @@ class TGS_BCTK_Ajax
         }
 
         return ['success' => true, 'http_code' => $code, 'file_bytes_base64' => $bytes];
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════════
+     * SỬA PHIẾU (kế toán cấp cao) — chỉ khi CHƯA phát hành hoá đơn
+     *
+     * Chạy ĐÚNG SITE của phiếu bằng switch_to_blog + đọc/ghi bảng theo
+     * $wpdb->prefix tươi (KHÔNG dùng hằng số TGS_TABLE_* — chúng bám site tổng,
+     * xem vat_pdf()). Tiền quy đổi & cộng tổng qua TGS_Money — luật ở
+     * tgs_shop_management/docs/mo-hinh-tien-va-bang-local-ledger-item.md.
+     *
+     * ⚠️ Chỉ đụng dòng hàng + tổng tiền phiếu. Tồn kho HỆ THỐNG NÀY suy từ
+     * chính local_ledger_item nên tự khớp; còn PHIẾU THU thì không tự chỉnh —
+     * nếu tổng đổi mà tiền đã thu khác thì trả cảnh báo để kế toán xử tay.
+     * ═══════════════════════════════════════════════════════════════════════ */
+
+    /**
+     * Vào ngữ cảnh sửa: switch_to_blog, kiểm quyền sửa, trả phiếu + phiếu xuất con.
+     * Gọi wp_send_json_error nếu không được phép.
+     *
+     * @return array{sale: array, export_id: int}
+     */
+    private static function vat_edit_context($blog_id, $sale_id, &$switched)
+    {
+        $blog_id = (int) $blog_id;
+        $sale_id = (int) $sale_id;
+        if ($blog_id <= 0 || $sale_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu blog_id hoặc sale_id.'], 400);
+        }
+
+        $switched = false;
+        if (function_exists('switch_to_blog') && get_current_blog_id() !== $blog_id) {
+            switch_to_blog($blog_id);
+            $switched = true;
+        }
+
+        global $wpdb;
+        $L = $wpdb->prefix . 'local_ledger';
+        $VI = $wpdb->prefix . 'local_viettel_invoice';
+
+        $sale = $wpdb->get_row($wpdb->prepare(
+            "SELECT local_ledger_id, local_ledger_code, local_ledger_note, local_ledger_type,
+                    local_ledger_parent_id, local_ledger_meta_id, user_id
+               FROM {$L}
+              WHERE local_ledger_id = %d AND local_ledger_type = 10
+                AND (is_deleted = 0 OR is_deleted IS NULL) LIMIT 1",
+            $sale_id
+        ), ARRAY_A);
+        if (empty($sale)) {
+            wp_send_json_error(['message' => 'Không tìm thấy phiếu bán.'], 404);
+        }
+
+        // Bill Z (nội bộ) → sửa thoải mái. Ngược lại: cấm sửa nếu ĐÃ phát hành.
+        $is_z = false;
+        $pid = (int) ($sale['local_ledger_parent_id'] ?? 0);
+        if ($pid > 0) {
+            $pcode = (string) $wpdb->get_var($wpdb->prepare(
+                "SELECT local_ledger_code FROM {$L} WHERE local_ledger_id = %d AND local_ledger_type = 10 LIMIT 1",
+                $pid
+            ));
+            $suffix = class_exists('TGS_BCTK_Report') ? strtoupper(TGS_BCTK_Report::promo_suffix()) : 'Z';
+            $is_z = $pcode !== '' && strtoupper(trim($sale['local_ledger_code'])) === strtoupper(trim($pcode)) . $suffix;
+        }
+
+        if (!$is_z
+            && $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $VI)) === $VI) {
+            $state = strtolower((string) $wpdb->get_var($wpdb->prepare(
+                "SELECT invoice_state FROM {$VI}
+                  WHERE sale_ledger_id = %d AND (is_deleted = 0 OR is_deleted IS NULL)
+                  ORDER BY local_viettel_invoice_id DESC LIMIT 1",
+                $sale_id
+            )));
+            if (in_array($state, ['done', 'issued'], true)) {
+                wp_send_json_error([
+                    'message' => 'Phiếu đã phát hành hoá đơn (' . $state . ') — không sửa trực tiếp được. '
+                        . 'Dùng "Điều chỉnh" hoặc "Thay thế".',
+                ], 409);
+            }
+        }
+
+        // Phiếu xuất con (type 2, cha = phiếu bán) — nơi dòng hàng thật sự nằm
+        $export_id = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT local_ledger_id FROM {$L}
+              WHERE local_ledger_parent_id = %d AND local_ledger_type = 2
+                AND (is_deleted = 0 OR is_deleted IS NULL)
+              ORDER BY local_ledger_id ASC LIMIT 1",
+            $sale_id
+        ));
+
+        return ['sale' => $sale, 'export_id' => $export_id];
+    }
+
+    /** Dựng lại payload của MỘT phiếu sau khi sửa (để modal cập nhật tại chỗ) */
+    private static function vat_row_for_sale($blog_id, $sale_id)
+    {
+        $raw = TGS_BCTK_Report::site_vat_sales_rows(
+            (int) $blog_id, '2000-01-01', '2100-01-01', 'all', [(int) $sale_id]
+        );
+        if (empty($raw)) {
+            return null;
+        }
+        self::enrich_item_names($raw);
+        $r = $raw[0];
+        $r['_blog_id'] = (int) $blog_id;
+        return self::build_vat_row($r, self::site_code_of($blog_id), 'XBA', 1.0);
+    }
+
+    public static function vat_save_lines()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền sửa phiếu.'], 403);
+        }
+        if (!self::money_ready()) {
+            wp_send_json_error(['message' => 'Thiếu lớp tính tiền TGS_Money.'], 500);
+        }
+
+        $blog_id = (int) ($_POST['blog_id'] ?? 0);
+        $sale_id = (int) ($_POST['sale_id'] ?? 0);
+        $lines   = json_decode((string) wp_unslash($_POST['lines'] ?? '[]'), true);
+        if (!is_array($lines)) {
+            wp_send_json_error(['message' => 'Danh sách dòng hàng không hợp lệ.'], 400);
+        }
+
+        $switched = false;
+        $ctx = self::vat_edit_context($blog_id, $sale_id, $switched);
+
+        try {
+            global $wpdb;
+            $L  = $wpdb->prefix . 'local_ledger';
+            $LI = $wpdb->prefix . 'local_ledger_item';
+            $export_id = (int) $ctx['export_id'];
+            if ($export_id <= 0) {
+                wp_send_json_error(['message' => 'Phiếu chưa có phiếu xuất con — không sửa dòng được.'], 409);
+            }
+
+            $now = current_time('mysql');
+            $uid = get_current_user_id();
+
+            // id các dòng đang thuộc phiếu xuất (để chặn sửa nhầm phiếu khác)
+            $own = array_map('intval', (array) $wpdb->get_col($wpdb->prepare(
+                "SELECT local_ledger_item_id FROM {$LI}
+                  WHERE local_ledger_id = %d AND (is_deleted = 0 OR is_deleted IS NULL)",
+                $export_id
+            )));
+            $own = array_flip($own);
+
+            foreach ($lines as $ln) {
+                $id  = (int) ($ln['item_id'] ?? 0);
+                $del = !empty($ln['del']);
+                $qty = max(0, (float) ($ln['sl'] ?? 0));
+                $gia = max(0, (float) ($ln['don_gia'] ?? 0));   // POS: sau thuế, trước CK, 1 ĐVCB
+                $ck  = max(0, (float) ($ln['ck'] ?? 0));         // sau thuế, cả dòng
+                $pct = ($ln['thue_pct'] === '' || $ln['thue_pct'] === null || $ln['thue_pct'] === 'KCT')
+                    ? 0.0 : (float) $ln['thue_pct'];
+                $is_kct = (isset($ln['thue_pct']) && $ln['thue_pct'] === 'KCT') ? 1 : 0;
+                $sku = sanitize_text_field((string) ($ln['ma_hang'] ?? ''));
+                $ten = sanitize_text_field((string) ($ln['ten'] ?? ''));
+                $lo  = sanitize_text_field((string) ($ln['so_lo'] ?? ''));
+                $exp = sanitize_text_field((string) ($ln['exp'] ?? ''));
+                $exp = preg_match('/^\d{4}-\d{2}-\d{2}/', $exp) ? substr($exp, 0, 10) : null;
+                $note = sanitize_textarea_field((string) ($ln['ghi_chu'] ?? ''));
+                $dvt = sanitize_text_field((string) ($ln['dvt'] ?? ''));
+
+                if ($id > 0 && !isset($own[$id])) {
+                    continue; // không phải dòng của phiếu này
+                }
+
+                if ($del && $id > 0) {
+                    $wpdb->update($LI, ['is_deleted' => 1, 'deleted_at' => $now, 'updated_at' => $now], ['local_ledger_item_id' => $id]);
+                    continue;
+                }
+
+                $m = TGS_Money::from_pos($qty, $gia, $ck, $pct);
+                $data = [
+                    'quantity' => $qty,
+                    'price'    => $m['price'],
+                    'local_ledger_item_discount_amount' => $m['discount'],
+                    'local_ledger_item_tax_percent'     => $pct,
+                    'local_ledger_item_tax_amount'      => $m['tax'],
+                    'local_ledger_item_is_kct'          => $is_kct,
+                    'local_ledger_item_note'            => $note,
+                    'lot_code'  => $lo !== '' ? $lo : null,
+                    'exp_date'  => $exp,
+                    'updated_at' => $now,
+                ];
+                if ($sku !== '') { $data['local_product_sku'] = $sku; }
+                if ($ten !== '') { $data['local_ledger_item_product_name_cache'] = $ten; }
+
+                if ($id > 0) {
+                    $wpdb->update($LI, $data, ['local_ledger_item_id' => $id]);
+                } elseif (!$del && ($sku !== '' || $ten !== '' || $qty > 0)) {
+                    $wpdb->insert($LI, array_merge($data, [
+                        'local_ledger_id' => $export_id,
+                        'local_ledger_item_type' => 2,
+                        'local_ledger_item_unit_quantity' => $qty,
+                        'local_ledger_item_unit_ratio'    => 1,
+                        'local_ledger_item_unit_name'     => $dvt,
+                        'local_ledger_item_gift_type'     => 0,
+                        'user_id'    => $uid,
+                        'is_deleted' => 0,
+                        'created_at' => $now,
+                    ]));
+                }
+            }
+
+            // Dòng còn sống → id JSON + tổng tiền
+            $live = $wpdb->get_results($wpdb->prepare(
+                "SELECT local_ledger_item_id, quantity, price,
+                        local_ledger_item_discount_amount, local_ledger_item_tax_percent,
+                        local_ledger_item_tax_amount
+                   FROM {$LI}
+                  WHERE local_ledger_id = %d AND (is_deleted = 0 OR is_deleted IS NULL)
+                  ORDER BY local_ledger_item_id ASC",
+                $export_id
+            ), ARRAY_A) ?: [];
+
+            $ids_json = wp_json_encode(array_map(static function ($x) {
+                return (int) $x['local_ledger_item_id'];
+            }, $live), JSON_UNESCAPED_UNICODE);
+
+            $tot = TGS_Money::total($live);
+            $grand = (float) $tot['thanh_tien_dong'];
+
+            foreach ([$sale_id, $export_id] as $lid) {
+                $wpdb->update($L, [
+                    'local_ledger_item_id'     => $ids_json,
+                    'local_ledger_total_amount' => $grand,
+                    'updated_at' => $now,
+                ], ['local_ledger_id' => $lid]);
+            }
+
+            // Đối chiếu tiền đã thu
+            $paid = (float) $wpdb->get_var($wpdb->prepare(
+                "SELECT COALESCE(SUM(local_ledger_total_amount), 0) FROM {$L}
+                  WHERE local_ledger_parent_id = %d AND local_ledger_type IN (7, 8)
+                    AND (local_ledger_approver_status = 1)
+                    AND (is_deleted = 0 OR is_deleted IS NULL)",
+                $sale_id
+            ));
+            $warning = '';
+            if (abs($paid - $grand) >= 1) {
+                $warning = 'Tổng phiếu mới ' . number_format_i18n($grand) . 'đ nhưng tiền đã thu là '
+                    . number_format_i18n($paid) . 'đ — chênh ' . number_format_i18n($paid - $grand)
+                    . 'đ. Kiểm tra lại phiếu thu / công nợ.';
+            }
+
+            $row = self::vat_row_for_sale($blog_id, $sale_id);
+
+            if ($switched) { restore_current_blog(); $switched = false; }
+
+            wp_send_json_success([
+                'row'     => $row,
+                'warning' => $warning,
+                'message' => 'Đã lưu ' . count($live) . ' dòng · tổng phiếu ' . number_format_i18n($grand) . 'đ.',
+            ]);
+        } finally {
+            if ($switched) { restore_current_blog(); }
+        }
+    }
+
+    /**
+     * Tìm sản phẩm trong catalog GLOBAL để thêm dòng khi sửa phiếu.
+     *
+     * Bảng wp_global_product_name là bảng global (base_prefix) — không phụ thuộc
+     * site, không cần switch_to_blog.
+     */
+    public static function product_search()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền.'], 403);
+        }
+
+        global $wpdb;
+        $q = trim(sanitize_text_field((string) wp_unslash($_POST['q'] ?? '')));
+        if (mb_strlen($q) < 2) {
+            wp_send_json_success(['items' => []]);
+        }
+
+        $table = $wpdb->base_prefix . 'global_product_name';
+        if ($wpdb->get_var("SHOW TABLES LIKE '" . esc_sql($table) . "'") !== $table) {
+            wp_send_json_error(['message' => 'Chưa có bảng sản phẩm global.'], 500);
+        }
+
+        $like = '%' . $wpdb->esc_like($q) . '%';
+        $exact = $q;
+
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT global_product_sku            AS sku,
+                    global_product_name           AS name,
+                    global_product_unit           AS unit,
+                    global_product_price_after_tax AS price,
+                    global_product_tax            AS tax,
+                    global_product_is_kct         AS is_kct
+               FROM {$table}
+              WHERE global_product_sku = %s
+                 OR global_product_sku LIKE %s
+                 OR global_product_name LIKE %s
+                 OR global_product_barcode_main LIKE %s
+                 OR global_product_special_barcode LIKE %s
+              ORDER BY (global_product_sku = %s) DESC,
+                       (global_product_barcode_main = %s) DESC,
+                       CHAR_LENGTH(global_product_name) ASC
+              LIMIT 25",
+            $exact, $like, $like, $like, $like, $exact, $exact
+        ), ARRAY_A) ?: [];
+
+        $items = array_map(static function ($r) {
+            return [
+                'sku'   => (string) $r['sku'],
+                'name'  => (string) $r['name'],
+                'unit'  => (string) $r['unit'],
+                'price' => (float) $r['price'],
+                'tax'   => ($r['tax'] === null || $r['tax'] === '') ? null : (float) $r['tax'],
+                'is_kct' => (int) $r['is_kct'] === 1,
+            ];
+        }, $rows);
+
+        wp_send_json_success(['items' => $items]);
+    }
+
+    public static function vat_save_note()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền sửa ghi chú.'], 403);
+        }
+
+        $blog_id = (int) ($_POST['blog_id'] ?? 0);
+        $sale_id = (int) ($_POST['sale_id'] ?? 0);
+        $note    = trim(sanitize_textarea_field((string) wp_unslash($_POST['note'] ?? '')));
+
+        $switched = false;
+        $ctx = self::vat_edit_context($blog_id, $sale_id, $switched);
+
+        try {
+            global $wpdb;
+            $L = $wpdb->prefix . 'local_ledger';
+            $code = (string) $ctx['sale']['local_ledger_code'];
+
+            // Cùng định dạng POS: "Đơn POS <mã> | Ghi chú: <note>"
+            $stored = 'Đơn POS ' . $code . ($note !== '' ? ' | Ghi chú: ' . $note : '');
+            $wpdb->update($L, ['local_ledger_note' => $stored, 'updated_at' => current_time('mysql')],
+                ['local_ledger_id' => $sale_id]);
+
+            if ($switched) { restore_current_blog(); $switched = false; }
+            wp_send_json_success(['ghi_chu' => $note, 'message' => 'Đã lưu ghi chú.']);
+        } finally {
+            if ($switched) { restore_current_blog(); }
+        }
     }
 }
 
