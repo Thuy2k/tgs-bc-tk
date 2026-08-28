@@ -610,7 +610,7 @@
 .pm-lines { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .pm-lines__table {
     table-layout: fixed;
-    min-width: 1826px;   /* = tổng width các <col> */
+    min-width: 1740px;   /* ≈ tổng width các <col> (1726) + viền */
     border-collapse: collapse;
     font-size: 12.5px;
 }
@@ -641,15 +641,13 @@
 .pm-tag--edit { background: #fef9c3; color: #854d0e; }
 .pm-actions__sep { width: 1px; align-self: stretch; background: #cbd5e1; margin: 0 2px; }
 .pm-line__in {
-    width: 100%; min-width: 64px;
+    width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box;
     border: 1px solid #cbd5e1; border-radius: 4px;
     padding: 2px 5px; font: inherit; font-size: 12px; background: #fff;
 }
-.pm-line__in:focus { outline: 2px solid #2563eb; outline-offset: -1px; border-color: #2563eb; }
-.pm-lines__table td .pm-line__in[data-col="ma_hang"],
-.pm-lines__table td .pm-line__in[data-col="ten"],
-.pm-lines__table td .pm-line__in[data-col="ghi_chu"] { min-width: 120px; }
+.pm-line__in:focus { outline: 2px solid #2563eb; outline-offset: -2px; border-color: #2563eb; }
 td.c-num .pm-line__in { text-align: right; }
+select.pm-line__in { padding-right: 2px; }
 .pm-ro { background: #f1f5f9; color: #475569; }
 .pm-line__del {
     border: 0; background: #fee2e2; color: #b91c1c;

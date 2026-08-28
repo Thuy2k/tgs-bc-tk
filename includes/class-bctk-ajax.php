@@ -1949,28 +1949,39 @@ class TGS_BCTK_Ajax
                 $own[(int) $o['id']] = ['pct' => (float) $o['pct'], 'kct' => (int) $o['kct']];
             }
 
-            // Thuế suất cấu hình cho các mã hàng của dòng MỚI
+            /*
+             * Catalog GLOBAL cho MỌI mã hàng trong payload:
+             *   - Thuế suất dòng mới lấy từ đây (dòng cũ giữ số đã lưu — xem dưới).
+             *   - TÊN HÀNG: cột local_ledger_item_product_name_cache LUÔN lấy theo
+             *     tên trong catalog (không tin ô "Tên hàng" người dùng gõ) — đúng
+             *     ý "tên tự lấy theo mã hàng", tránh lưu chữ rác.
+             */
             $gp_table = $wpdb->base_prefix . 'global_product_name';
-            $new_skus = [];
+            $all_skus = [];
             foreach ($lines as $ln) {
-                if ((int) ($ln['item_id'] ?? 0) === 0 && empty($ln['del'])) {
+                if (empty($ln['del'])) {
                     $sk = trim((string) ($ln['ma_hang'] ?? ''));
-                    if ($sk !== '') { $new_skus[$sk] = true; }
+                    if ($sk !== '') { $all_skus[$sk] = true; }
                 }
             }
-            $gp_tax = [];
-            if (!empty($new_skus)
+            $gp_tax = [];   // sku => ['pct','kct','name']
+            if (!empty($all_skus)
                 && $wpdb->get_var("SHOW TABLES LIKE '" . esc_sql($gp_table) . "'") === $gp_table) {
-                $sk_list = array_keys($new_skus);
+                $sk_list = array_keys($all_skus);
                 $ph = implode(',', array_fill(0, count($sk_list), '%s'));
                 foreach ((array) $wpdb->get_results($wpdb->prepare(
                     "SELECT global_product_sku AS sku,
                             COALESCE(global_product_tax, 8)    AS pct,
-                            COALESCE(global_product_is_kct, 0) AS kct
+                            COALESCE(global_product_is_kct, 0) AS kct,
+                            COALESCE(global_product_name, '')  AS name
                        FROM {$gp_table} WHERE global_product_sku IN ({$ph})",
                     ...$sk_list
                 ), ARRAY_A) as $g) {
-                    $gp_tax[(string) $g['sku']] = ['pct' => (float) $g['pct'], 'kct' => (int) $g['kct']];
+                    $gp_tax[(string) $g['sku']] = [
+                        'pct'  => (float) $g['pct'],
+                        'kct'  => (int) $g['kct'],
+                        'name' => (string) $g['name'],
+                    ];
                 }
             }
 
@@ -2047,7 +2058,18 @@ class TGS_BCTK_Ajax
                     'updated_at' => $now,
                 ];
                 if ($sku !== '') { $data['local_product_sku'] = $sku; }
-                if ($ten !== '') { $data['local_ledger_item_product_name_cache'] = $ten; }
+
+                /*
+                 * TÊN HÀNG (cache) LẤY THEO CATALOG, KHÔNG TIN Ô NGƯỜI DÙNG GÕ.
+                 * Mã hàng có trong catalog → dùng tên catalog. Mã lạ (không có
+                 * trong global) → mới dùng tạm chữ người dùng gõ.
+                 */
+                $catalog_name = trim((string) ($gp_tax[$sku]['name'] ?? ''));
+                if ($catalog_name !== '') {
+                    $data['local_ledger_item_product_name_cache'] = $catalog_name;
+                } elseif ($ten !== '') {
+                    $data['local_ledger_item_product_name_cache'] = $ten;
+                }
 
                 if ($id > 0) {
                     $wpdb->update($LI, $data, ['local_ledger_item_id' => $id]);

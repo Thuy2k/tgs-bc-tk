@@ -118,10 +118,11 @@
         +     '<div class="pm-doc__seller" id="pmSeller"></div>'
         +   '</div>'
 
-        +   '<div class="pm-lines" data-ds-no-export data-ds-no-colcfg data-ds-no-filter data-ds-no-resize>'
-        +     '<table class="pm-lines__table" data-ds-no-grid data-ds-no-export data-ds-no-colcfg data-ds-no-filter data-ds-no-resize>'
-        // Bề ngang cột CỐ ĐỊNH bằng colgroup — header & body luôn thẳng hàng,
-        // cả bảng cuộn ngang như một khối, không dính bộ kéo cột của DS.
+        +   '<div class="pm-lines" data-ds-no-export data-ds-no-colcfg data-ds-no-filter>'
+        +     '<table class="pm-lines__table" data-ds-no-grid data-ds-no-export data-ds-no-colcfg data-ds-no-filter>'
+        // <colgroup> bề ngang mặc định — header & body luôn thẳng hàng dù vẽ lại
+        // liên tục lúc sửa. VẪN kéo giãn cột được: DS chỉnh cả <col> lẫn <th>
+        // (setColElementWidth) nên colgroup + kéo cột chạy chung được.
         +       '<colgroup>'
         +         '<col style="width:46px"><col style="width:118px"><col style="width:220px">'
         +         '<col style="width:52px"><col style="width:116px"><col style="width:64px">'
@@ -191,9 +192,9 @@
         $m.on('click', '#pmEditAdd', addLine);
         $m.on('click', '.pm-line__del', function () { delLine($(this).data('i')); });
         $m.on('input change', '.pm-line__in', onLineInput);
-        $m.on('input', '.pm-line__in[data-col="ma_hang"], .pm-line__in[data-col="ten"]', onSearchInput);
+        $m.on('input', '.pm-line__in[data-col="ma_hang"]', onSearchInput);
         $m.on('keydown', '.pm-line__in', onLineKey);
-        $m.on('blur', '.pm-line__in[data-col="ma_hang"], .pm-line__in[data-col="ten"]',
+        $m.on('blur', '.pm-line__in[data-col="ma_hang"]',
             function () { setTimeout(acHide, 150); });
         $m.on('mousedown', '.pm-ac__row', function (e) {
             e.preventDefault();
@@ -318,7 +319,8 @@
             return '<tr data-i="' + i + '">'
                 + '<td><button type="button" class="pm-line__del" data-i="' + i + '" title="Xoá dòng">✕</button> ' + (i + 1) + '</td>'
                 + '<td>' + inp('ma_hang', ln.ma_hang) + '</td>'
-                + '<td>' + inp('ten', ln.ten) + '</td>'
+                // Tên hàng CHỈ HIỂN THỊ — lấy theo mã hàng trong catalog, không gõ tay
+                + '<td class="pm-ro" title="' + esc(ln.ten || '') + '">' + esc(ln.ten || '—') + '</td>'
                 + '<td>' + esc(ln.kho || current.ma_shop || '') + '</td>'
                 + '<td>' + dvtCell() + '</td>'
                 + '<td class="c-num">' + inp('sl', ln.sl, 'type="number" step="any" inputmode="decimal"') + '</td>'
@@ -528,7 +530,7 @@
         var i = parseInt($in.data('i'), 10);
 
         // Đang mở gợi ý sản phẩm ở ô Mã hàng / Tên hàng → phím điều hướng gợi ý
-        if (!$('#pmAc').hasClass('bctk-hidden') && (col === 'ma_hang' || col === 'ten')) {
+        if (!$('#pmAc').hasClass('bctk-hidden') && col === 'ma_hang') {
             if (k === 'ArrowDown') { e.preventDefault(); acMove(1); return; }
             if (k === 'ArrowUp') { e.preventDefault(); acMove(-1); return; }
             if (k === 'Enter') {
