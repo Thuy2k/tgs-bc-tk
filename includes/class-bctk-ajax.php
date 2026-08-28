@@ -2078,11 +2078,23 @@ class TGS_BCTK_Ajax
             $import_id
         ), ARRAY_A) ?: [];
 
+        /*
+         * Tên hàng: dòng phiếu nhập thường KHÔNG lưu cache tên và không gắn
+         * local_product_name_id → bồi từ catalog GLOBAL theo mã hàng, giống
+         * build_purchase_rows() dùng product_info().
+         */
+        $cat = TGS_BCTK_Report::product_info(array_column($raw, 'sku'));
+
         $items = [];
         $sum_before_ck = 0.0; $sum_before = 0.0; $sum_tax = 0.0; $sum_ck = 0.0; $grand = 0.0;
         $stt = 0;
         foreach ($raw as $it) {
             $stt++;
+            $sku = (string) $it['sku'];
+            $ten = trim((string) $it['ten']);
+            if ($ten === '') {
+                $ten = (string) ($cat[$sku]['name'] ?? '');
+            }
             $qty = (float) $it['qty'];
             $gia = (float) $it['gia'];   // ĐVCB, trước thuế, trước CK
             $ck  = (float) $it['ck'];    // cả dòng, trước thuế
@@ -2097,8 +2109,8 @@ class TGS_BCTK_Ajax
 
             $items[] = [
                 'stt'          => $stt,
-                'ma_hang'      => (string) $it['sku'],
-                'ten'          => (string) $it['ten'],
+                'ma_hang'      => $sku,
+                'ten'          => $ten,
                 'kho'          => (string) $it['kho'],
                 'dvt'          => (string) $it['dvt'],
                 'sl'           => $sl_unit,
