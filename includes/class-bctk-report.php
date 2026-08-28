@@ -1493,4 +1493,608 @@ class TGS_BCTK_Report
 
         return $map;
     }
+
+    /* ═══════════════════════════════════════════════════════════════════════
+     * KHỐI QUẢN LÝ VAT — Phiếu xuất bán (VAT) & Phiếu điều chỉnh giảm (VAT)
+     *
+     * Đây là báo cáo TỔNG QUAN CHO KẾ TOÁN nhiều shop, khác hẳn màn "Danh sách
+     * gửi hoá đơn thuế" trong tgs_pos (màn của quầy, mỗi shop chỉ nhìn đơn mình,
+     * chỉ 3 trạng thái). Xem docs/bao-cao-vat-phieu-xuat-ban-va-dieu-chinh.md.
+     *
+     * Ba luật giữ khớp với luồng gửi thuế:
+     *   1. Tiền LUÔN tính lại từ local_ledger_item qua TGS_Money (phía AJAX làm),
+     *      không đọc vi.total_* — theo mo-hinh-tien-va-bang-local-ledger-item.md.
+     *   2. "Thông tin VAT" xét theo bản ghi local_viettel_invoice mới nhất của
+     *      phiếu: có bản ghi = đã có; không = chưa gửi; state lỗi = gửi lỗi.
+     *   3. Bill Z (phiếu nội bộ) nhận diện bằng QUAN HỆ CHA–CON + hậu tố Z,
+     *      không chỉ nhìn chữ Z cuối mã — xem is_promo_split_bill_row() ở
+     *      tgs-viettel-invoice và bill-z-va-hang-tang.md.
+     * ═══════════════════════════════════════════════════════════════════════ */
+
+    /** invoice_state thuộc nhóm "gửi lỗi" */
+    const VAT_ERROR_STATES = ['issue_error', 'cqt_error', 'validate_error', 'error'];
+
+    /**
+     * Sáu cột SELECT bóc người mua đã chốt ở màn review, từ JSON meta của phiếu
+     * (khoá tax_invoice_buyer — xem TGS_Viettel_Invoice_Flow_Service). Trả về
+     * chuỗi kết thúc bằng dấu phẩy để nối thẳng vào câu SELECT.
+     *
+     * @param string $alias bí danh bảng local_ledger_meta trong câu SQL
+     */
+    private static function buyer_meta_selects($alias)
+    {
+        $base = "'$.tax_invoice_buyer.";
+        $col  = static function ($path, $as) use ($alias, $base) {
+            return "JSON_UNQUOTE(JSON_EXTRACT({$alias}.local_ledger_meta_value, {$base}{$path}')) AS {$as}";
+        };
+
+        return implode(",\n                ", [
+            $col('customer_company_name', 'b_company'),
+            $col('customer_name', 'b_name'),
+            $col('customer_tax_code', 'b_mst'),
+            $col('customer_address', 'b_addr'),
+            $col('customer_email', 'b_email'),
+            $col('customer_phone', 'b_phone'),
+        ]) . ',';
+    }
+
+    /** Hậu tố mã bill Z — lấy từ tgs_pos nếu bật, mặc định 'Z' */
+    public static function promo_suffix()
+    {
+        if (class_exists('TGS_POS_Order_Handler')
+            && method_exists('TGS_POS_Order_Handler', 'promo_split_code_suffix')) {
+            $s = (string) TGS_POS_Order_Handler::promo_split_code_suffix();
+            return $s !== '' ? $s : 'Z';
+        }
+        return 'Z';
+    }
+
+    /**
+     * PHIẾU XUẤT BÁN (VAT) — mỗi PHIẾU BÁN (type 10) một dòng, kèm danh sách
+     * dòng hàng thô để phía AJAX tính tiền và dựng modal.
+     *
+     * @param string $bill_scope 'normal' (bỏ bill Z) | 'internal' (chỉ bill Z) | 'all'
+     * @return array[] mỗi phần tử có khoá 'items' => array dòng hàng thô
+     */
+    public static function site_vat_sales_rows($blog_id, $date_from, $date_to, $bill_scope = 'normal')
+    {
+        global $wpdb;
+
+        $blog_id = (int) $blog_id;
+        if ($blog_id <= 0) {
+            return [];
+        }
+
+        $prefix       = $wpdb->get_blog_prefix($blog_id);
+        $ledger_table = $prefix . 'local_ledger';
+        $item_table   = $prefix . 'local_ledger_item';
+        $person_table = $prefix . 'local_ledger_person';
+        $meta_table   = $prefix . 'local_ledger_meta';
+        $pname_table  = $prefix . 'local_product_name';
+        $vi_table     = $prefix . 'local_viettel_invoice';
+
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $ledger_table)) !== $ledger_table) {
+            return [];
+        }
+
+        $has_vi = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $vi_table)) === $vi_table;
+
+        $A    = self::APPROVER_STATUS_APPROVED;
+        $SALE = 10;
+        $from = $date_from . ' 00:00:00';
+        $to   = $date_to . ' 23:59:59';
+
+        $buyer_sql = self::buyer_meta_selects('mt');
+
+        /*
+         * Bản ghi VAT mới nhất của mỗi phiếu. Bản ghi điều chỉnh KHÔNG gắn
+         * sale_ledger_id (cố ý, để không che hoá đơn gốc) nên MAX theo
+         * sale_ledger_id là an toàn.
+         */
+        $vi_join = $has_vi
+            ? "LEFT JOIN (
+                   SELECT v1.* FROM {$vi_table} v1
+                   INNER JOIN (
+                       SELECT sale_ledger_id, MAX(local_viettel_invoice_id) AS mx
+                       FROM {$vi_table}
+                       WHERE sale_ledger_id IS NOT NULL
+                         AND (is_deleted = 0 OR is_deleted IS NULL)
+                       GROUP BY sale_ledger_id
+                   ) vm ON vm.mx = v1.local_viettel_invoice_id
+               ) vi ON vi.sale_ledger_id = l.local_ledger_id"
+            : '';
+
+        $vi_cols = $has_vi
+            ? "vi.local_viettel_invoice_id AS vi_id,
+               vi.invoice_series          AS seri,
+               vi.viettel_invoice_no      AS so_hd,
+               vi.template_code           AS mau_hd,
+               vi.invoice_state           AS vat_state,
+               vi.issue_status            AS issue_status,
+               vi.send_cqt_status         AS send_cqt_status,
+               vi.issue_sent_at           AS ngay_hd,
+               vi.buyer_name              AS vi_buyer_name,
+               vi.buyer_tax_code          AS vi_buyer_mst,
+               vi.issue_response_payload  AS issue_payload,"
+            : "NULL AS vi_id, NULL AS seri, NULL AS so_hd, NULL AS mau_hd,
+               NULL AS vat_state, NULL AS issue_status, NULL AS send_cqt_status,
+               NULL AS ngay_hd, NULL AS vi_buyer_name, NULL AS vi_buyer_mst,
+               NULL AS issue_payload,";
+
+        $sql = "
+            SELECT
+                l.local_ledger_id      AS sale_id,
+                l.local_ledger_code    AS code,
+                l.created_at           AS ngay_xuat,
+                l.local_ledger_note    AS ghi_chu,
+                l.user_id              AS user_id,
+                l.local_ledger_item_id AS item_id_json,
+                par.local_ledger_code  AS parent_code,
+                COALESCE(u.display_name, u.user_login, '')          AS nv_ten,
+                COALESCE(pe.local_ledger_person_name, '')           AS kh_ten,
+                COALESCE(pe.local_ledger_person_phone, '')          AS kh_dt,
+                COALESCE(pe.local_ledger_person_address, '')        AS kh_dchi,
+                COALESCE(pe.local_ledger_person_email, '')          AS kh_email,
+                COALESCE(pe.local_ledger_person_tax_code, '')       AS kh_mst,
+                JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label')) AS httt,
+                {$buyer_sql}
+                {$vi_cols}
+                l.local_ledger_id AS _keep
+            FROM {$ledger_table} l
+            LEFT JOIN {$ledger_table} par
+                   ON par.local_ledger_id = l.local_ledger_parent_id
+                  AND par.local_ledger_type = l.local_ledger_type
+            LEFT JOIN {$person_table} pe ON pe.local_ledger_person_id = l.local_ledger_person_id
+            LEFT JOIN {$meta_table}   mt ON mt.local_ledger_meta_id   = l.local_ledger_meta_id
+            LEFT JOIN {$wpdb->users}   u ON u.ID = l.user_id
+            {$vi_join}
+            WHERE l.local_ledger_type = {$SALE}
+              AND (l.is_deleted = 0 OR l.is_deleted IS NULL)
+              AND l.local_ledger_approver_status = {$A}
+              AND l.created_at BETWEEN %s AND %s
+            ORDER BY l.created_at DESC, l.local_ledger_code
+        ";
+
+        $rows = $wpdb->get_results($wpdb->prepare($sql, $from, $to), ARRAY_A) ?: [];
+        if (empty($rows)) {
+            return [];
+        }
+
+        $suffix = strtoupper(self::promo_suffix());
+
+        // Lọc bill Z theo phạm vi
+        $kept = [];
+        foreach ($rows as $r) {
+            $parent = strtoupper(trim((string) ($r['parent_code'] ?? '')));
+            $code   = strtoupper(trim((string) ($r['code'] ?? '')));
+            $is_z   = ($parent !== '' && $code === $parent . $suffix);
+            $r['is_z'] = $is_z ? 1 : 0;
+
+            if ($bill_scope === 'normal' && $is_z) {
+                continue;
+            }
+            if ($bill_scope === 'internal' && !$is_z) {
+                continue;
+            }
+            $kept[] = $r;
+        }
+        if (empty($kept)) {
+            return [];
+        }
+
+        // Gom mọi item_id để lấy dòng hàng trong MỘT truy vấn
+        $all_ids = [];
+        foreach ($kept as &$r) {
+            $ids = json_decode((string) ($r['item_id_json'] ?? ''), true);
+            $ids = is_array($ids) ? array_values(array_filter(array_map('intval', $ids))) : [];
+            $r['_item_ids'] = $ids;
+            foreach ($ids as $id) {
+                $all_ids[$id] = true;
+            }
+        }
+        unset($r);
+
+        $item_map = [];
+        if (!empty($all_ids)) {
+            $ids = array_keys($all_ids);
+            $ph  = implode(',', array_fill(0, count($ids), '%d'));
+            $item_rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT i.local_ledger_item_id AS id,
+                        i.quantity  AS qty,
+                        i.price     AS gia,
+                        COALESCE(i.local_ledger_item_discount_amount, 0) AS chiet_khau,
+                        i.local_ledger_item_tax_percent AS thue_pct,
+                        COALESCE(i.local_ledger_item_tax_amount, 0)      AS thue,
+                        COALESCE(i.local_ledger_item_is_kct, 0)          AS is_kct,
+                        COALESCE(i.local_ledger_item_gift_type, 0)       AS gift_type,
+                        COALESCE(i.local_product_sku, '')                AS sku,
+                        COALESCE(i.local_ledger_item_product_name_cache, pn.local_product_name, '') AS ten,
+                        COALESCE(NULLIF(i.local_ledger_item_unit_name, ''), pn.local_product_unit, '') AS dvt,
+                        COALESCE(NULLIF(i.local_ledger_item_unit_ratio, 0), 1) AS ratio,
+                        COALESCE(i.local_ledger_item_unit_quantity, 0)   AS sl_dvt
+                   FROM {$item_table} i
+                   LEFT JOIN {$pname_table} pn ON pn.local_product_name_id = i.local_product_name_id
+                  WHERE i.local_ledger_item_id IN ({$ph})
+                    AND (i.is_deleted = 0 OR i.is_deleted IS NULL)",
+                ...$ids
+            ), ARRAY_A) ?: [];
+            foreach ($item_rows as $ir) {
+                $item_map[(int) $ir['id']] = $ir;
+            }
+        }
+
+        $out = [];
+        foreach ($kept as $r) {
+            $items = [];
+            foreach ($r['_item_ids'] as $id) {
+                if (isset($item_map[$id])) {
+                    $items[] = $item_map[$id];
+                }
+            }
+            unset($r['_item_ids'], $r['item_id_json'], $r['_keep']);
+            $r['items'] = $items;
+            $out[] = $r;
+        }
+
+        return $out;
+    }
+
+    /**
+     * PHIẾU ĐIỀU CHỈNH GIẢM (VAT) — mỗi dòng hàng đợi điều chỉnh một dòng.
+     *
+     * Nguồn là bảng GLOBAL wp_tgs_viettel_invoice_return_adjustments (có cột
+     * blog_id), join sang phiếu hoàn / phiếu bán / bản ghi VAT điều chỉnh của
+     * chính site đó. Dòng hàng lấy từ local_ledger_item_id (JSON) của phiếu
+     * hoàn (type 3) — cùng cách build_payload() của return-adjustment đọc.
+     */
+    public static function site_vat_adjust_rows($blog_id, $date_from, $date_to, $bill_scope = 'normal')
+    {
+        global $wpdb;
+
+        $blog_id = (int) $blog_id;
+        if ($blog_id <= 0) {
+            return [];
+        }
+
+        $queue_table = $wpdb->base_prefix . 'tgs_viettel_invoice_return_adjustments';
+        if ($wpdb->get_var("SHOW TABLES LIKE '" . esc_sql($queue_table) . "'") !== $queue_table) {
+            return [];
+        }
+
+        $prefix       = $wpdb->get_blog_prefix($blog_id);
+        $ledger_table = $prefix . 'local_ledger';
+        $item_table   = $prefix . 'local_ledger_item';
+        $person_table = $prefix . 'local_ledger_person';
+        $meta_table   = $prefix . 'local_ledger_meta';
+        $pname_table  = $prefix . 'local_product_name';
+        $vi_table     = $prefix . 'local_viettel_invoice';
+
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $ledger_table)) !== $ledger_table) {
+            return [];
+        }
+        $has_vi = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $vi_table)) === $vi_table;
+
+        $from = $date_from . ' 00:00:00';
+        $to   = $date_to . ' 23:59:59';
+
+        $buyer_sql = self::buyer_meta_selects('mt');
+
+        $vi_join = $has_vi
+            ? "LEFT JOIN {$vi_table} vi ON vi.local_viettel_invoice_id = q.adjustment_invoice_record_id"
+            : '';
+        $vi_cols = $has_vi
+            ? "vi.invoice_series  AS seri,
+               vi.template_code   AS mau_hd,
+               vi.invoice_state   AS vat_state,
+               vi.issue_status    AS issue_status,
+               vi.send_cqt_status AS send_cqt_status,
+               vi.issue_sent_at   AS ngay_hd,
+               vi.buyer_name      AS vi_buyer_name,
+               vi.buyer_tax_code  AS vi_buyer_mst,"
+            : "NULL AS seri, NULL AS mau_hd, NULL AS vat_state, NULL AS issue_status,
+               NULL AS send_cqt_status, NULL AS ngay_hd, NULL AS vi_buyer_name,
+               NULL AS vi_buyer_mst,";
+
+        $sql = "
+            SELECT
+                q.id                     AS queue_id,
+                q.status                 AS queue_status,
+                q.sale_ledger_id         AS sale_id,
+                q.original_invoice_no    AS so_hd_goc,
+                q.adjustment_invoice_no  AS so_hd,
+                q.error_message          AS queue_error,
+                q.created_at             AS queue_created,
+                r.local_ledger_id        AS return_id,
+                r.local_ledger_code      AS return_code,
+                r.created_at             AS ngay_xuat,
+                r.local_ledger_note      AS ghi_chu,
+                r.user_id                AS user_id,
+                r.local_ledger_item_id   AS item_id_json,
+                s.local_ledger_code      AS sale_code,
+                s.local_ledger_parent_id AS sale_parent_id,
+                COALESCE(u.display_name, u.user_login, '')     AS nv_ten,
+                COALESCE(pe.local_ledger_person_name, '')      AS kh_ten,
+                COALESCE(pe.local_ledger_person_phone, '')     AS kh_dt,
+                COALESCE(pe.local_ledger_person_address, '')   AS kh_dchi,
+                COALESCE(pe.local_ledger_person_email, '')     AS kh_email,
+                COALESCE(pe.local_ledger_person_tax_code, '')  AS kh_mst,
+                JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label')) AS httt,
+                {$buyer_sql}
+                {$vi_cols}
+                q.id AS _keep
+            FROM {$queue_table} q
+            LEFT JOIN {$ledger_table} r  ON r.local_ledger_id = q.return_ledger_id
+            LEFT JOIN {$ledger_table} s  ON s.local_ledger_id = q.sale_ledger_id
+            LEFT JOIN {$person_table} pe ON pe.local_ledger_person_id = COALESCE(r.local_ledger_person_id, s.local_ledger_person_id)
+            LEFT JOIN {$meta_table}   mt ON mt.local_ledger_meta_id   = s.local_ledger_meta_id
+            LEFT JOIN {$wpdb->users}   u ON u.ID = r.user_id
+            {$vi_join}
+            WHERE q.blog_id = %d
+              AND q.created_at BETWEEN %s AND %s
+            ORDER BY q.created_at DESC, q.id DESC
+        ";
+
+        $rows = $wpdb->get_results($wpdb->prepare($sql, $blog_id, $from, $to), ARRAY_A) ?: [];
+        if (empty($rows)) {
+            return [];
+        }
+
+        // Bill Z: phiếu bán gốc là bill tách nội bộ (có cha + hậu tố Z)
+        $suffix = strtoupper(self::promo_suffix());
+        $parent_ids = [];
+        foreach ($rows as $r) {
+            $pid = (int) ($r['sale_parent_id'] ?? 0);
+            if ($pid > 0) {
+                $parent_ids[$pid] = true;
+            }
+        }
+        $parent_code_map = [];
+        if (!empty($parent_ids)) {
+            $pids = array_keys($parent_ids);
+            $ph   = implode(',', array_fill(0, count($pids), '%d'));
+            $pc = $wpdb->get_results($wpdb->prepare(
+                "SELECT local_ledger_id AS id, local_ledger_code AS code
+                   FROM {$ledger_table} WHERE local_ledger_id IN ({$ph})",
+                ...$pids
+            ), ARRAY_A) ?: [];
+            foreach ($pc as $p) {
+                $parent_code_map[(int) $p['id']] = strtoupper(trim((string) $p['code']));
+            }
+        }
+
+        $kept = [];
+        foreach ($rows as $r) {
+            $pid  = (int) ($r['sale_parent_id'] ?? 0);
+            $pcode = $parent_code_map[$pid] ?? '';
+            $scode = strtoupper(trim((string) ($r['sale_code'] ?? '')));
+            $is_z = ($pcode !== '' && $scode === $pcode . $suffix);
+            $r['is_z'] = $is_z ? 1 : 0;
+
+            if ($bill_scope === 'normal' && $is_z) {
+                continue;
+            }
+            if ($bill_scope === 'internal' && !$is_z) {
+                continue;
+            }
+            $kept[] = $r;
+        }
+        if (empty($kept)) {
+            return [];
+        }
+
+        $all_ids = [];
+        foreach ($kept as &$r) {
+            $ids = json_decode((string) ($r['item_id_json'] ?? ''), true);
+            $ids = is_array($ids) ? array_values(array_filter(array_map('intval', $ids))) : [];
+            $r['_item_ids'] = $ids;
+            foreach ($ids as $id) {
+                $all_ids[$id] = true;
+            }
+        }
+        unset($r);
+
+        $item_map = [];
+        if (!empty($all_ids)) {
+            $ids = array_keys($all_ids);
+            $ph  = implode(',', array_fill(0, count($ids), '%d'));
+            $item_rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT i.local_ledger_item_id AS id,
+                        i.quantity  AS qty,
+                        i.price     AS gia,
+                        COALESCE(i.local_ledger_item_discount_amount, 0) AS chiet_khau,
+                        i.local_ledger_item_tax_percent AS thue_pct,
+                        COALESCE(i.local_ledger_item_tax_amount, 0)      AS thue,
+                        COALESCE(i.local_ledger_item_is_kct, 0)          AS is_kct,
+                        COALESCE(i.local_product_sku, '')                AS sku,
+                        COALESCE(i.local_ledger_item_product_name_cache, pn.local_product_name, '') AS ten,
+                        COALESCE(NULLIF(i.local_ledger_item_unit_name, ''), pn.local_product_unit, '') AS dvt,
+                        COALESCE(NULLIF(i.local_ledger_item_unit_ratio, 0), 1) AS ratio,
+                        COALESCE(i.local_ledger_item_unit_quantity, 0)   AS sl_dvt
+                   FROM {$item_table} i
+                   LEFT JOIN {$pname_table} pn ON pn.local_product_name_id = i.local_product_name_id
+                  WHERE i.local_ledger_item_id IN ({$ph})
+                    AND (i.is_deleted = 0 OR i.is_deleted IS NULL)",
+                ...$ids
+            ), ARRAY_A) ?: [];
+            foreach ($item_rows as $ir) {
+                $item_map[(int) $ir['id']] = $ir;
+            }
+        }
+
+        $out = [];
+        foreach ($kept as $r) {
+            $items = [];
+            foreach ($r['_item_ids'] as $id) {
+                if (isset($item_map[$id])) {
+                    $items[] = $item_map[$id];
+                }
+            }
+            unset($r['_item_ids'], $r['item_id_json'], $r['_keep']);
+            $r['items'] = $items;
+            $out[] = $r;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Nhãn cột "Trạng thái VAT".
+     *
+     * @param string $state    invoice_state của bản ghi VAT ('' nếu không có)
+     * @param bool   $has_record Có bản ghi local_viettel_invoice hay không
+     */
+    public static function vat_state_label($state, $has_record)
+    {
+        $state = strtolower(trim((string) $state));
+
+        if (!$has_record || $state === '' || $state === 'unsent') {
+            return 'Hóa đơn chưa lập VAT';
+        }
+        if (in_array($state, ['done', 'issued'], true)) {
+            return 'Hóa đơn có chữ ký số';
+        }
+        if (in_array($state, ['pending', 'processing', 'blocked'], true)) {
+            return 'Đang xử lý';
+        }
+        if (in_array($state, self::VAT_ERROR_STATES, true)) {
+            return 'Gửi lỗi VAT';
+        }
+        if ($state === 'skipped') {
+            return 'Bỏ qua (không gửi thuế)';
+        }
+        return $state;
+    }
+
+    /**
+     * Thông tin ĐƠN VỊ BÁN của một site — đọc từ option của chính blog đó.
+     * Cache theo request để nhiều dòng cùng site không hỏi lại option.
+     */
+    private static $seller_cache = [];
+
+    public static function seller_info($blog_id)
+    {
+        $blog_id = (int) $blog_id;
+        if (isset(self::$seller_cache[$blog_id])) {
+            return self::$seller_cache[$blog_id];
+        }
+
+        $name = get_blog_option($blog_id, 'blogname', '');
+        $addr = get_blog_option($blog_id, 'tgs_shop_address', '');
+        $phone = get_blog_option($blog_id, 'tgs_shop_phone', '');
+        $mst = get_blog_option($blog_id, 'tgs_shop_tax_code', '');
+
+        // Dự phòng MST: bảng shop áp dụng VAT
+        if (trim((string) $mst) === '' && class_exists('TGS_BCTK_Vat_Shops')) {
+            foreach (TGS_BCTK_Vat_Shops::all(false) as $shop) {
+                if ((int) ($shop['blog_id'] ?? 0) === $blog_id && !empty($shop['tax_code'])) {
+                    $mst = (string) $shop['tax_code'];
+                    break;
+                }
+            }
+        }
+
+        return self::$seller_cache[$blog_id] = [
+            'name'  => (string) $name,
+            'addr'  => (string) $addr,
+            'phone' => (string) $phone,
+            'mst'   => (string) $mst,
+        ];
+    }
+
+    /** Tên người mua theo nhãn bán lẻ — khớp TGS_Viettel_Invoice_Flow_Service */
+    public static function retail_buyer_name($name, $tax_code)
+    {
+        if (class_exists('TGS_Viettel_Invoice_Flow_Service')) {
+            $is_retail = TGS_Viettel_Invoice_Flow_Service::is_retail_buyer([
+                'customer_name'     => $name,
+                'customer_tax_code' => $tax_code,
+            ]);
+            return $is_retail
+                ? TGS_Viettel_Invoice_Flow_Service::retail_buyer_label()
+                : (string) $name;
+        }
+
+        $folded = function_exists('remove_accents') ? remove_accents((string) $name) : (string) $name;
+        $folded = strtolower(trim(preg_replace('/\s+/', ' ', $folded)));
+        $placeholders = ['', 'khach le', 'khach hang le', 'khach vang lai'];
+        if (trim((string) $tax_code) === '' && in_array($folded, $placeholders, true)) {
+            return 'Bán cho người tiêu dùng';
+        }
+        return (string) $name;
+    }
+
+    /**
+     * Đọc số tiền VND ra chữ, kiểu "Bảy mươi tám nghìn đồng chẵn",
+     * "Không đồng chẵn". Không có helper sẵn trong repo.
+     */
+    public static function doc_tien_bang_chu($amount)
+    {
+        $amount = (int) round((float) $amount);
+        $neg = $amount < 0;
+        $amount = abs($amount);
+
+        if ($amount === 0) {
+            return 'Không đồng chẵn';
+        }
+
+        $cs = ['không', 'một', 'hai', 'ba', 'bốn', 'năm', 'sáu', 'bảy', 'tám', 'chín'];
+        $dv = ['', ' nghìn', ' triệu', ' tỷ', ' nghìn tỷ', ' triệu tỷ'];
+
+        $doc_khoi = static function ($num, $day_du) use ($cs) {
+            $tram = intdiv($num, 100);
+            $chuc = intdiv($num % 100, 10);
+            $donvi = $num % 10;
+            $out = '';
+
+            if ($day_du || $tram > 0) {
+                $out .= $cs[$tram] . ' trăm';
+            }
+
+            if ($chuc === 0) {
+                if ($donvi > 0) {
+                    $out .= ($out !== '' ? ' lẻ ' : '') . $cs[$donvi];
+                }
+            } elseif ($chuc === 1) {
+                $out .= ' mười';
+                if ($donvi === 5) {
+                    $out .= ' lăm';
+                } elseif ($donvi > 0) {
+                    $out .= ' ' . $cs[$donvi];
+                }
+            } else {
+                $out .= ' ' . $cs[$chuc] . ' mươi';
+                if ($donvi === 1) {
+                    $out .= ' mốt';
+                } elseif ($donvi === 5) {
+                    $out .= ' lăm';
+                } elseif ($donvi > 0) {
+                    $out .= ' ' . $cs[$donvi];
+                }
+            }
+
+            return trim($out);
+        };
+
+        $groups = [];
+        while ($amount > 0) {
+            $groups[] = $amount % 1000;
+            $amount = intdiv($amount, 1000);
+        }
+
+        $parts = [];
+        $n = count($groups);
+        for ($i = $n - 1; $i >= 0; $i--) {
+            if ($groups[$i] === 0) {
+                continue;
+            }
+            $parts[] = $doc_khoi($groups[$i], $i < $n - 1) . $dv[$i];
+        }
+
+        $text = trim(preg_replace('/\s+/', ' ', implode(' ', $parts)));
+        $text = function_exists('mb_strtoupper')
+            ? mb_strtoupper(mb_substr($text, 0, 1)) . mb_substr($text, 1)
+            : ucfirst($text);
+
+        return ($neg ? 'Trừ ' : '') . $text . ' đồng chẵn';
+    }
 }

@@ -80,6 +80,8 @@ class TGS_BCTK_Ajax
         add_action('wp_ajax_tgs_bctk_fetch_sales_sum', [__CLASS__, 'fetch_sales_sum']);
         add_action('wp_ajax_tgs_bctk_fetch_purchase_report', [__CLASS__, 'fetch_purchase_report']);
         add_action('wp_ajax_tgs_bctk_fetch_purchase_sum', [__CLASS__, 'fetch_purchase_sum']);
+        add_action('wp_ajax_tgs_bctk_fetch_vat_sales', [__CLASS__, 'fetch_vat_sales']);
+        add_action('wp_ajax_tgs_bctk_fetch_vat_adjust', [__CLASS__, 'fetch_vat_adjust']);
         add_action('wp_ajax_tgs_bctk_refresh_nonce', [__CLASS__, 'refresh_nonce']);
     }
 
@@ -1134,6 +1136,463 @@ class TGS_BCTK_Ajax
         }
 
         return ['rows' => $rows, 'site' => $site];
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════════
+     * QUẢN LÝ VAT — Phiếu xuất bán (VAT) & Phiếu điều chỉnh giảm (VAT)
+     *
+     * Mỗi lượt AJAX xử lý ĐÚNG MỘT SITE (bctk-filter.js chạy theo batch, giống
+     * mọi báo cáo BC_TK). Tiền LUÔN tính lại từ item qua TGS_Money — không đọc
+     * vi.total_*. Xem docs/bao-cao-vat-phieu-xuat-ban-va-dieu-chinh.md.
+     * ═══════════════════════════════════════════════════════════════════════ */
+
+    /** Đọc + kiểm tham số chung cho hai màn VAT */
+    private static function vat_common_params()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền xem báo cáo']);
+        }
+
+        $blog_id = isset($_POST['blog_id']) ? (int) $_POST['blog_id'] : 0;
+        if ($blog_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu blog_id']);
+        }
+
+        $today = current_time('Y-m-d');
+        $from  = self::sanitize_date($_POST['date_from'] ?? '', $today);
+        $to    = self::sanitize_date($_POST['date_to'] ?? '', $today);
+        if ($from > $to) {
+            list($from, $to) = [$to, $from];
+        }
+
+        $scope = sanitize_text_field(wp_unslash($_POST['bill_scope'] ?? 'normal'));
+        if (!in_array($scope, ['normal', 'internal', 'all'], true)) {
+            $scope = 'normal';
+        }
+
+        $vat_filter = sanitize_text_field(wp_unslash($_POST['vat_filter'] ?? 'all'));
+        if (!in_array($vat_filter, ['all', 'has_vat', 'no_vat', 'vat_error'], true)) {
+            $vat_filter = 'all';
+        }
+
+        return compact('blog_id', 'from', 'to', 'scope', 'vat_filter');
+    }
+
+    /** Mã shop (tgs_site_code) của một blog — cho cột đầu bảng */
+    private static function site_code_of($blog_id)
+    {
+        foreach (TGS_BCTK_Sites::list_sites() as $s) {
+            if ((int) $s['blog_id'] === (int) $blog_id) {
+                return (string) ($s['code'] !== '' ? $s['code'] : $s['name']);
+            }
+        }
+        return '';
+    }
+
+    /**
+     * Tiền của MỘT dòng hàng — làm tròn y hệt build_sales_rows() và POS.
+     *
+     * Trả về: tt_chua_thue, thue, thanh_tien (đều đã làm tròn đồng), ck (thô,
+     * trước thuế), don_gia_gui_thue, tax_pct, is_kct.
+     */
+    private static function vat_line_money(array $it)
+    {
+        $qty      = (float) ($it['qty'] ?? 0);
+        $gia      = (float) ($it['gia'] ?? 0);
+        $ck       = (float) ($it['chiet_khau'] ?? 0);
+        $raw_pct  = $it['thue_pct'];
+        $is_kct   = (int) ($it['is_kct'] ?? 0) === 1;
+        $tax_pct  = ($raw_pct === null || $raw_pct === '') ? 0.0 : (float) $raw_pct;
+
+        $m    = TGS_Money::line($qty, $gia, $ck, $tax_pct);
+        $thue = round((float) ($it['thue'] ?? 0));
+        $thanh_tien = round($m['tien_hang_sau_ck'] + $thue);
+        $tt_chua_thue = $thanh_tien - $thue;
+
+        return [
+            'tt_chua_thue'      => $tt_chua_thue,
+            'thue'              => $thue,
+            'thanh_tien'        => $thanh_tien,
+            'ck'                => $ck,
+            'don_gia_gui_thue'  => round((float) $m['don_gia_gui_thue']),
+            'tax_pct'           => $is_kct ? null : $tax_pct,
+            'tax_pct_raw'       => ($raw_pct === null || $raw_pct === '') ? null : (float) $raw_pct,
+            'is_kct'            => $is_kct,
+        ];
+    }
+
+    /** Thuế suất đại diện cho cả phiếu (ưu tiên mức khác 8%) */
+    private static function vat_representative_rate(array $pcts, $has_kct, $has_taxed)
+    {
+        $pcts = array_values(array_unique(array_filter($pcts, static function ($p) {
+            return $p !== null;
+        })));
+
+        if (empty($pcts)) {
+            return $has_kct ? 'KCT' : ($has_taxed ? 8 : 0);
+        }
+        if (count($pcts) === 1) {
+            return $pcts[0] + 0;
+        }
+        foreach ($pcts as $p) {
+            if ((float) $p !== 8.0) {
+                return $p + 0;
+            }
+        }
+        return 8;
+    }
+
+    /** Lấy giá trị đầu tiên có thật trong JSON payload theo danh sách đường dẫn */
+    private static function parse_payload_path($payload, array $paths)
+    {
+        $data = json_decode((string) $payload, true);
+        if (!is_array($data)) {
+            return '';
+        }
+        foreach ($paths as $path) {
+            $cur = $data;
+            foreach ($path as $key) {
+                if (is_array($cur) && array_key_exists($key, $cur)) {
+                    $cur = $cur[$key];
+                } else {
+                    $cur = null;
+                    break;
+                }
+            }
+            if (is_scalar($cur) && trim((string) $cur) !== '') {
+                return (string) $cur;
+            }
+        }
+        return '';
+    }
+
+    /** Bóc số hoá đơn từ issue_response_payload nếu cột viettel_invoice_no trống */
+    private static function parse_invoice_no($payload, $fallback)
+    {
+        $fallback = trim((string) $fallback);
+        if ($fallback !== '') {
+            return $fallback;
+        }
+        return self::parse_payload_path($payload, [
+            ['result', 'invoiceNo'], ['data', 'invoiceNo'],
+            ['result', 'invoiceNumber'], ['data', 'invoiceNumber'],
+            ['invoiceNo'], ['invoiceNumber'],
+        ]);
+    }
+
+    /**
+     * Bồi tên hàng cho dòng item khi cache trên phiếu trống — lấy từ catalog
+     * global, một truy vấn cho cả loạt phiếu (giống các báo cáo BC_TK khác).
+     */
+    private static function enrich_item_names(array &$raw)
+    {
+        $skus = [];
+        foreach ($raw as $r) {
+            foreach ((array) ($r['items'] ?? []) as $it) {
+                $sku = trim((string) ($it['sku'] ?? ''));
+                if ($sku !== '') {
+                    $skus[$sku] = true;
+                }
+            }
+        }
+        if (empty($skus)) {
+            return;
+        }
+
+        $info = TGS_BCTK_Report::product_info(array_keys($skus));
+        foreach ($raw as &$r) {
+            if (empty($r['items'])) {
+                continue;
+            }
+            foreach ($r['items'] as &$it) {
+                if (trim((string) ($it['ten'] ?? '')) === '') {
+                    $it['ten'] = (string) ($info[(string) ($it['sku'] ?? '')]['name'] ?? '');
+                }
+                if (trim((string) ($it['dvt'] ?? '')) === '') {
+                    $it['dvt'] = (string) ($info[(string) ($it['sku'] ?? '')]['unit'] ?? '');
+                }
+            }
+            unset($it);
+        }
+        unset($r);
+    }
+
+    /**
+     * Dựng một dòng bảng (đủ 32 cột + meta cho modal) từ một phiếu thô.
+     *
+     * @param array  $r         dòng thô từ site_vat_*_rows()
+     * @param string $ma_shop   mã shop
+     * @param string $ly_do     'XBA' | 'DCG'
+     * @param float  $sign      1 (bán) | -1 (điều chỉnh giảm)
+     */
+    private static function build_vat_row(array $r, $ma_shop, $ly_do, $sign)
+    {
+        // Dấu cho báo cáo điều chỉnh giảm; tránh -0 lọt ra JSON
+        $s = static function ($v) use ($sign) {
+            $v = $v * $sign;
+            return ($v == 0.0) ? 0 : $v;
+        };
+
+        $tt_chua_thue = 0.0;
+        $tong_thue    = 0.0;
+        $thanh_tien   = 0.0;
+        $tong_ck      = 0.0;
+        $pcts = [];
+        $has_kct = false;
+        $has_taxed = false;
+        $items = [];
+        $stt = 1;
+
+        foreach ((array) ($r['items'] ?? []) as $it) {
+            $mo = self::vat_line_money($it);
+            $tt_chua_thue += $mo['tt_chua_thue'];
+            $tong_thue    += $mo['thue'];
+            $thanh_tien   += $mo['thanh_tien'];
+            $tong_ck      += $mo['ck'];
+            $pcts[] = $mo['tax_pct'];
+            if ($mo['is_kct']) {
+                $has_kct = true;
+            }
+            if (!$mo['is_kct'] && $mo['tax_pct'] > 0) {
+                $has_taxed = true;
+            }
+
+            $items[] = [
+                'stt'            => $stt++,
+                'ten'            => (string) ($it['ten'] ?? ''),
+                'sku'            => (string) ($it['sku'] ?? ''),
+                'dvt'            => (string) ($it['dvt'] ?? ''),
+                'sl'             => $s((float) ($it['qty'] ?? 0)),
+                'don_gia'        => $mo['don_gia_gui_thue'],
+                'tien_chua_thue' => $s($mo['tt_chua_thue']),
+                'thue_suat'      => $mo['is_kct'] ? 'KCT'
+                    : ($mo['tax_pct_raw'] === null ? 'Chưa khai' : ($mo['tax_pct'] + 0)),
+                'tien_thue'      => $s($mo['thue']),
+                'thanh_tien'     => $s($mo['thanh_tien']),
+                'is_gift'        => (int) ($it['gift_type'] ?? 0) === 1,
+            ];
+        }
+
+        $rate = self::vat_representative_rate($pcts, $has_kct, $has_taxed);
+
+        $vat_state    = strtolower(trim((string) ($r['vat_state'] ?? '')));
+        $queue_status = strtolower(trim((string) ($r['queue_status'] ?? '')));
+        $has_vat      = !empty($r['vi_id']) || $vat_state !== ''
+            || ($ly_do === 'DCG' && $queue_status !== '' && $queue_status !== 'pending');
+
+        /*
+         * Phiếu điều chỉnh chưa phát hành thì chưa có invoice_state — suy nhãn
+         * trạng thái từ trạng thái hàng đợi để kế toán biết việc đang ở đâu.
+         */
+        $state_label = TGS_BCTK_Report::vat_state_label($vat_state, $has_vat);
+        if ($ly_do === 'DCG' && $vat_state === '') {
+            $map = [
+                'pending'  => 'Chờ xử lý điều chỉnh',
+                'blocked'  => 'Đang xử lý',
+                'error'    => 'Gửi lỗi VAT',
+                'skipped'  => 'Bỏ qua (không gửi thuế)',
+                'done'     => 'Hóa đơn có chữ ký số',
+            ];
+            $state_label = $map[$queue_status] ?? 'Chờ xử lý điều chỉnh';
+        }
+
+        // Người mua: ưu tiên bản ghi VAT / buyer meta, rồi tới khách của phiếu
+        $mua_mst  = self::first_nonempty([$r['vi_buyer_mst'] ?? '', $r['b_mst'] ?? '', $r['kh_mst'] ?? '']);
+        $mua_ten  = self::first_nonempty([$r['b_name'] ?? '', $r['kh_ten'] ?? '']);
+        $mua_dchi = self::first_nonempty([$r['b_addr'] ?? '', $r['kh_dchi'] ?? '']);
+        $mua_mail = self::first_nonempty([$r['b_email'] ?? '', $r['kh_email'] ?? '']);
+        $mua_dt   = self::first_nonempty([$r['b_phone'] ?? '', $r['kh_dt'] ?? '']);
+
+        /*
+         * Cột "Tên công ty bên mua" chỉ có nghĩa khi khách LÀ đơn vị. Nhãn nội
+         * bộ / nhãn bán lẻ ("Khách lẻ", "Bán cho người tiêu dùng") KHÔNG được
+         * đổ vào đây — để trống, giống hoá đơn.
+         */
+        $mua_cty_raw = self::first_nonempty([$r['b_company'] ?? '', $r['vi_buyer_name'] ?? '', $r['kh_ten'] ?? '']);
+        $mua_cty = self::is_placeholder_name($mua_cty_raw) ? '' : $mua_cty_raw;
+
+        $seller = TGS_BCTK_Report::seller_info((int) $r['_blog_id']);
+
+        // MST bên bán: option shop trống thì lấy đúng cái đã gửi CQT trong payload
+        $seller_mst = $seller['mst'];
+        if (trim((string) $seller_mst) === '') {
+            $seller_mst = self::parse_payload_path($r['issue_payload'] ?? '', [
+                ['result', 'supplierTaxCode'], ['data', 'supplierTaxCode'], ['supplierTaxCode'],
+            ]);
+        }
+
+        $so_hd = ($ly_do === 'DCG')
+            ? (string) ($r['so_hd'] ?? '')
+            : self::parse_invoice_no($r['issue_payload'] ?? '', $r['so_hd'] ?? '');
+
+        $ghi_chu = self::extract_order_note($r['ghi_chu'] ?? '');
+        if ($ly_do === 'DCG' && trim((string) ($r['so_hd_goc'] ?? '')) !== '') {
+            $ghi_chu = trim('HĐ gốc: ' . $r['so_hd_goc'] . ($ghi_chu !== '' ? ' — ' . $ghi_chu : ''));
+        }
+
+        return [
+            'ma_shop'        => $ma_shop,
+            'seri'           => (string) ($r['seri'] ?? ''),
+            'mau_hd'         => (string) ($r['mau_hd'] ?? ''),
+            'httt'           => (string) ($r['httt'] ?? ''),
+            'ma_kh'          => (string) ($r['kh_dt'] ?? ''),
+            'so_hd'          => $so_hd,
+            'ghi_chu'        => $ghi_chu,
+            'tt_chua_thue'   => $s($tt_chua_thue),
+            'ngay_hd'        => self::clean_datetime($r['ngay_hd'] ?? ''),
+            'tong_thue'      => $s($tong_thue),
+            'thanh_tien'     => $s($thanh_tien),
+            'thanh_tien_chu' => TGS_BCTK_Report::doc_tien_bang_chu($s($thanh_tien)),
+            'tong_ck'        => $s($tong_ck),
+            'ty_le_thue'     => $rate,
+            'ten_cty_mua'    => $mua_cty,
+            'ten_kh'         => TGS_BCTK_Report::retail_buyer_name($mua_ten, $mua_mst),
+            'dchi_mua'       => $mua_dchi,
+            'email_mua'      => $mua_mail,
+            'dt_mua'         => $mua_dt,
+            'mst_mua'        => $mua_mst,
+            'dchi_ban'       => $seller['addr'],
+            'ten_cty_ban'    => $seller['name'],
+            'dt_ban'         => $seller['phone'],
+            'mst_ban'        => $seller_mst,
+            'ngay_xuat'      => self::clean_datetime($r['ngay_xuat'] ?? ''),
+            'so_phieu_xuat'  => (string) ($r['code'] ?? $r['return_code'] ?? ''),
+            'nv_ten'         => (string) ($r['nv_ten'] ?? ''),
+            'ly_do'          => $ly_do,
+            'trang_thai_vat' => $state_label,
+            'so_so'          => '',
+            'sl_ban_ghi'     => count($items),
+            'user_id'        => (int) ($r['user_id'] ?? 0),
+
+            // ── meta (không phải cột hiển thị) ──
+            'blog_id'    => (int) $r['_blog_id'],
+            'sale_id'    => (int) ($r['sale_id'] ?? 0),
+            'is_z'       => (int) ($r['is_z'] ?? 0),
+            'has_vat'    => $has_vat ? 1 : 0,
+            'vat_state'  => $vat_state,
+            'invoice_no' => $so_hd,
+            'queue_status' => (string) ($r['queue_status'] ?? ''),
+            'items'      => $items,
+        ];
+    }
+
+    private static function first_nonempty(array $vals)
+    {
+        foreach ($vals as $v) {
+            if (trim((string) $v) !== '') {
+                return (string) $v;
+            }
+        }
+        return '';
+    }
+
+    /** DATETIME rỗng / 0000-00-00 → chuỗi rỗng */
+    private static function clean_datetime($v)
+    {
+        $v = trim((string) $v);
+        if ($v === '' || strpos($v, '0000-00-00') === 0) {
+            return '';
+        }
+        return $v;
+    }
+
+    /** "Khách lẻ" / "Bán cho người tiêu dùng" / rỗng — nhãn nội bộ, không phải tên đơn vị */
+    private static function is_placeholder_name($name)
+    {
+        $name = trim((string) $name);
+        if ($name === '') {
+            return true;
+        }
+        if (class_exists('TGS_Viettel_Invoice_Flow_Service')) {
+            if (TGS_Viettel_Invoice_Flow_Service::is_placeholder_buyer_name($name)) {
+                return true;
+            }
+            if ($name === TGS_Viettel_Invoice_Flow_Service::retail_buyer_label()) {
+                return true;
+            }
+        }
+        $folded = function_exists('remove_accents') ? remove_accents($name) : $name;
+        $folded = strtolower(trim(preg_replace('/\s+/', ' ', $folded)));
+        return in_array($folded, [
+            'khach le', 'khach hang le', 'khach vang lai', 'ban cho nguoi tieu dung',
+        ], true);
+    }
+
+    /** Áp bộ lọc "thông tin VAT" lên một dòng đã dựng */
+    private static function vat_row_passes_filter(array $row, $vat_filter)
+    {
+        if ($vat_filter === 'all') {
+            return true;
+        }
+        if ($vat_filter === 'has_vat') {
+            return !empty($row['has_vat']);
+        }
+        if ($vat_filter === 'no_vat') {
+            return empty($row['has_vat']);
+        }
+        // vat_error
+        $err_states = TGS_BCTK_Report::VAT_ERROR_STATES;
+        return !empty($row['has_vat'])
+            && (in_array($row['vat_state'], $err_states, true)
+                || in_array($row['queue_status'], ['error', 'blocked'], true));
+    }
+
+    public static function fetch_vat_sales()
+    {
+        $p = self::vat_common_params();
+
+        if (!self::money_ready()) {
+            wp_send_json_error(['message' => 'Thiếu lớp tính tiền TGS_Money (plugin tgs_shop_management).']);
+        }
+
+        try {
+            $raw = TGS_BCTK_Report::site_vat_sales_rows($p['blog_id'], $p['from'], $p['to'], $p['scope']);
+        } catch (Exception $e) {
+            wp_send_json_error(['message' => $e->getMessage(), 'blog_id' => $p['blog_id']]);
+        }
+
+        self::enrich_item_names($raw);
+        $ma_shop = self::site_code_of($p['blog_id']);
+        $rows = [];
+        foreach ($raw as $r) {
+            $r['_blog_id'] = $p['blog_id'];
+            $row = self::build_vat_row($r, $ma_shop, 'XBA', 1.0);
+            if (self::vat_row_passes_filter($row, $p['vat_filter'])) {
+                $rows[] = $row;
+            }
+        }
+
+        wp_send_json_success(['rows' => $rows]);
+    }
+
+    public static function fetch_vat_adjust()
+    {
+        $p = self::vat_common_params();
+
+        if (!self::money_ready()) {
+            wp_send_json_error(['message' => 'Thiếu lớp tính tiền TGS_Money (plugin tgs_shop_management).']);
+        }
+
+        try {
+            $raw = TGS_BCTK_Report::site_vat_adjust_rows($p['blog_id'], $p['from'], $p['to'], $p['scope']);
+        } catch (Exception $e) {
+            wp_send_json_error(['message' => $e->getMessage(), 'blog_id' => $p['blog_id']]);
+        }
+
+        self::enrich_item_names($raw);
+        $ma_shop = self::site_code_of($p['blog_id']);
+        $rows = [];
+        foreach ($raw as $r) {
+            $r['_blog_id'] = $p['blog_id'];
+            $row = self::build_vat_row($r, $ma_shop, 'DCG', -1.0);
+            if (self::vat_row_passes_filter($row, $p['vat_filter'])) {
+                $rows[] = $row;
+            }
+        }
+
+        wp_send_json_success(['rows' => $rows]);
     }
 }
 
