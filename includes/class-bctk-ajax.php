@@ -1985,6 +1985,33 @@ class TGS_BCTK_Ajax
                 }
             }
 
+            // Bản ghi SẢN PHẨM LOCAL của site shop — để dòng hàng trỏ đúng
+            // local_product_name_id / global_product_name_id như luồng POS.
+            $lp_table = $wpdb->prefix . 'local_product_name';
+            $lp = [];   // sku => ['lid','gid','name','unit']
+            if (!empty($all_skus)) {
+                $sk_list = array_keys($all_skus);
+                $ph = implode(',', array_fill(0, count($sk_list), '%s'));
+                foreach ((array) $wpdb->get_results($wpdb->prepare(
+                    "SELECT local_product_sku AS sku,
+                            local_product_name_id  AS lid,
+                            global_product_name_id AS gid,
+                            local_product_name     AS name,
+                            local_product_unit     AS unit
+                       FROM {$lp_table}
+                      WHERE local_product_sku IN ({$ph})
+                        AND (is_deleted = 0 OR is_deleted IS NULL)",
+                    ...$sk_list
+                ), ARRAY_A) as $p) {
+                    $lp[(string) $p['sku']] = [
+                        'lid'  => (int) $p['lid'],
+                        'gid'  => $p['gid'] !== null ? (int) $p['gid'] : 0,
+                        'name' => (string) $p['name'],
+                        'unit' => (string) $p['unit'],
+                    ];
+                }
+            }
+
             foreach ($lines as $ln) {
                 $id  = (int) ($ln['item_id'] ?? 0);
                 $del = !empty($ln['del']);
@@ -2060,15 +2087,20 @@ class TGS_BCTK_Ajax
                 if ($sku !== '') { $data['local_product_sku'] = $sku; }
 
                 /*
-                 * TÊN HÀNG (cache) LẤY THEO CATALOG, KHÔNG TIN Ô NGƯỜI DÙNG GÕ.
-                 * Mã hàng có trong catalog → dùng tên catalog. Mã lạ (không có
-                 * trong global) → mới dùng tạm chữ người dùng gõ.
+                 * TRỎ SẢN PHẨM + TÊN CACHE theo luồng POS: ưu tiên bản ghi sản
+                 * phẩm LOCAL của site shop, rồi catalog GLOBAL; KHÔNG tin ô "Tên
+                 * hàng" người dùng gõ (chỉ dùng tạm khi mã lạ).
                  */
-                $catalog_name = trim((string) ($gp_tax[$sku]['name'] ?? ''));
-                if ($catalog_name !== '') {
-                    $data['local_ledger_item_product_name_cache'] = $catalog_name;
-                } elseif ($ten !== '') {
-                    $data['local_ledger_item_product_name_cache'] = $ten;
+                $lpr = $lp[$sku] ?? null;
+                if ($lpr && $lpr['lid'] > 0) {
+                    $data['local_product_name_id'] = $lpr['lid'];
+                    if ($lpr['gid'] > 0) { $data['global_product_name_id'] = $lpr['gid']; }
+                }
+                $cache_name = trim((string) ($lpr['name'] ?? ''));
+                if ($cache_name === '') { $cache_name = trim((string) ($gp_tax[$sku]['name'] ?? '')); }
+                if ($cache_name === '') { $cache_name = $ten; }
+                if ($cache_name !== '') {
+                    $data['local_ledger_item_product_name_cache'] = $cache_name;
                 }
 
                 if ($id > 0) {
