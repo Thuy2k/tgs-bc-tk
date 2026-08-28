@@ -85,6 +85,8 @@ class TGS_BCTK_Ajax
         add_action('wp_ajax_tgs_bctk_vat_pdf', [__CLASS__, 'vat_pdf']);
         add_action('wp_ajax_tgs_bctk_vat_save_lines', [__CLASS__, 'vat_save_lines']);
         add_action('wp_ajax_tgs_bctk_vat_save_note', [__CLASS__, 'vat_save_note']);
+        // Xem lại MỘT phiếu bán từ các màn báo cáo bán hàng (chỉ đọc + sửa ghi chú)
+        add_action('wp_ajax_tgs_bctk_phieu_view', [__CLASS__, 'phieu_view']);
         add_action('wp_ajax_tgs_bctk_product_search', [__CLASS__, 'product_search']);
         add_action('wp_ajax_tgs_bctk_product_units', [__CLASS__, 'product_units']);
         add_action('wp_ajax_tgs_bctk_refresh_nonce', [__CLASS__, 'refresh_nonce']);
@@ -168,6 +170,7 @@ class TGS_BCTK_Ajax
 
             $rows[] = [
                 'blog_id' => $blog_id,
+                'sale_id' => (int) ($r['sale_id'] ?? 0),
                 'kho'     => $is_warehouse ? ($no_zone ? $site['name'] : $zone) : $site_label,
                 'no_zone' => $no_zone,
                 'pbh'     => (string) $r['pbh'],
@@ -588,6 +591,8 @@ class TGS_BCTK_Ajax
             $da_tra = round((float) $r['da_tra']);
 
             $rows[] = [
+                'blog_id' => $blog_id,
+                'sale_id' => (int) ($r['sale_id'] ?? 0),
                 'kho'     => $is_warehouse ? ($no_zone ? $site['name'] : $zone) : $site_label,
                 'no_zone' => $no_zone,
                 'pbh'     => (string) $r['pbh'],
@@ -742,6 +747,8 @@ class TGS_BCTK_Ajax
             $gia_dvt  = round($gia_dvcb * $ratio);
 
             $rows[] = [
+                'blog_id'  => $blog_id,
+                'sale_id'  => (int) ($r['sale_id'] ?? 0),
                 'kho'      => $is_warehouse ? ($no_zone ? $site['name'] : $zone) : $site_label,
                 'no_zone'  => $no_zone,
                 'sku'      => (string) $r['sku'],
@@ -1909,6 +1916,38 @@ class TGS_BCTK_Ajax
         ));
 
         return ['sale' => $sale, 'export_id' => $export_id];
+    }
+
+    /**
+     * Xem lại MỘT phiếu bán từ các màn báo cáo bán hàng (Sổ CSKH, Báo cáo bán
+     * hàng, Tổng hợp bán hàng). CHỈ ĐỌC — modal chỉ cho sửa ghi chú, không cho
+     * sửa dòng hàng (việc đó nhạy cảm, phải vào Bán hàng → Quản lý VAT).
+     *
+     * Dùng lại đúng luồng dựng payload của màn VAT (vat_row_for_sale) nên modal
+     * hiện y hệt: chứng từ, bên bán/bên mua, dòng hàng, tổng tiền theo TGS_Money.
+     * Chạy chéo site an toàn (site_vat_sales_rows tự bám prefix theo blog_id).
+     */
+    public static function phieu_view()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền xem phiếu.'], 403);
+        }
+        if (!self::money_ready()) {
+            wp_send_json_error(['message' => 'Thiếu lớp tính tiền TGS_Money.'], 500);
+        }
+
+        $blog_id = (int) ($_POST['blog_id'] ?? 0);
+        $sale_id = (int) ($_POST['sale_id'] ?? 0);
+        if ($blog_id <= 0 || $sale_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu blog_id hoặc sale_id.'], 400);
+        }
+
+        $row = self::vat_row_for_sale($blog_id, $sale_id);
+        if (!$row) {
+            wp_send_json_error(['message' => 'Không tìm thấy phiếu bán.'], 404);
+        }
+        wp_send_json_success(['row' => $row]);
     }
 
     /** Dựng lại payload của MỘT phiếu sau khi sửa (để modal cập nhật tại chỗ) */

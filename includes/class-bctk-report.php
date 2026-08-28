@@ -765,6 +765,7 @@ class TGS_BCTK_Report
         $sql = "
             SELECT
                 p.local_ledger_code                        AS pbh,
+                p.local_ledger_id                          AS sale_id,
                 p.created_at                               AS ngay_mua,
                 li.local_product_sku                       AS sku,
                 li.quantity                                AS qty,
@@ -890,6 +891,7 @@ class TGS_BCTK_Report
                 COALESCE(li.local_ledger_item_warehouse_zone, '') AS zone,
                 li.local_product_sku                       AS sku,
                 p.local_ledger_code                        AS pbh,
+                p.local_ledger_id                          AS sale_id,
                 p.created_at                               AS ngay,
                 li.quantity                                AS qty,
                 /*
@@ -1042,6 +1044,7 @@ class TGS_BCTK_Report
         $sql = "
             SELECT
                 d.local_ledger_code                        AS pbh,
+                IF(d.local_ledger_type = 11, d.local_ledger_parent_id, d.local_ledger_id) AS sale_id,
                 d.local_ledger_type                        AS lt,
                 d.created_at                               AS ngay,
                 COALESCE(d.local_ledger_total_amount, 0)   AS tong_tien,

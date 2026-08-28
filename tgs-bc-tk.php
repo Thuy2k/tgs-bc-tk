@@ -259,6 +259,36 @@ class TGS_BCTK_Plugin
             ]);
         }
 
+        /*
+         * Ba màn báo cáo bán hàng: bấm một dòng → mở lại phiếu bán trên component
+         * modal dùng chung (chỉ đọc + sửa ghi chú). Không sửa dòng hàng ở đây —
+         * việc đó phải vào Bán hàng → Quản lý VAT.
+         */
+        if (in_array($view, [self::VIEW_CSKH, self::VIEW_SALES, self::VIEW_SALESSUM], true)) {
+            wp_enqueue_script(
+                'tgs-bctk-phieu-modal',
+                TGS_BCTK_URL . 'assets/js/bctk-phieu-modal.js',
+                ['jquery'],
+                TGS_BCTK_VERSION . '.' . @filemtime(TGS_BCTK_DIR . 'assets/js/bctk-phieu-modal.js'),
+                true
+            );
+            wp_enqueue_script(
+                'tgs-bctk-phieu-view',
+                TGS_BCTK_URL . 'assets/js/bctk-phieu-view.js',
+                ['jquery', 'tgs-bctk-phieu-modal'],
+                TGS_BCTK_VERSION . '.' . @filemtime(TGS_BCTK_DIR . 'assets/js/bctk-phieu-view.js'),
+                true
+            );
+
+            $actor = wp_get_current_user();
+            wp_localize_script('tgs-bctk-phieu-view', 'tgsBctkPhieuView', [
+                'ajaxUrl'   => admin_url('admin-ajax.php'),
+                'nonce'     => wp_create_nonce(TGS_BCTK_Ajax::NONCE),
+                'actorId'   => (int) $actor->ID,
+                'actorName' => $actor->display_name ?: $actor->user_login,
+            ]);
+        }
+
         // Màn khai shop áp dụng VAT có JS riêng (thêm/sửa/xoá), các màn khác không cần
         if ($view === self::VIEW_VAT_SHOPS) {
             wp_enqueue_script(

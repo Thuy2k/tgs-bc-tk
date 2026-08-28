@@ -196,7 +196,9 @@ $bctk_today = current_time('Y-m-d');
         }
 
         function rowHtml(r, i) {
-            return '<tr data-i="' + i + '"' + (r.tra_lai ? ' class="bctk-row-return"' : '') + '>'
+            return '<tr data-i="' + i + '"'
+                + ' data-blog="' + (r.blog_id || '') + '" data-sale="' + (r.sale_id || '') + '"'
+                + ' class="bctk-clickrow' + (r.tra_lai ? ' bctk-row-return' : '') + '">'
                 + '<td class="c-zone">' + esc(r.kho)
                     + (r.no_zone ? ' <span class="bctk-warn" title="Dữ liệu chưa gán phân kho">chưa phân kho</span>' : '')
                 + '</td>'

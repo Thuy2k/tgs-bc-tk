@@ -275,7 +275,36 @@ không cần `switch_to_blog`.
 - Client gửi `thue_pct` lên chỉ để hiện tạm; `vat_save_lines` **luôn ghi đè**
   bằng số ở trên.
 
-### 6.3 Việc còn phải làm
+### 6.3 Modal là component dùng chung
+
+`bctk-phieu-modal.js` để dùng lại cho Sổ CSKH, Báo cáo/Tổng hợp bán hàng, menu
+Mua hàng... — mỗi màn chỉ truyền `payload` + mảng `actions` riêng. Tiền luôn
+theo `tgs_shop_management/docs/mo-hinh-tien-va-bang-local-ledger-item.md`.
+
+### 6.4 Xem lại phiếu ở 3 màn báo cáo bán hàng (CHỈ ĐỌC)
+
+**Sổ CSKH · Báo cáo bán hàng / Hàng bán trả lại · Tổng hợp bán hàng** — bấm một
+dòng bảng → mở lại **phiếu bán** trên đúng component modal, luồng dựng payload y
+hệt màn VAT. Đây là **xem** — cho sửa **ghi chú** (khi phiếu chưa phát hành /
+bill Z), **không** cho sửa dòng hàng (nhạy cảm — phải vào *Bán hàng → Quản lý
+VAT*). Không cần shop đã khai thuế; nếu chưa có bản ghi VAT thì các ô Seri / Số
+HĐ / Trạng thái để trống hoặc "Hóa đơn chưa lập VAT".
+
+Cách nối:
+- `site_sales_rows` / `site_cskh_rows` thêm `p.local_ledger_id AS sale_id`;
+  `site_sales_sum_rows` thêm `IF(type=11, parent_id, id) AS sale_id` (dòng hoàn →
+  mở phiếu bán cha). `build_sales_rows` / `build_cskh_rows` /
+  `build_sales_sum_rows` gắn `blog_id` + `sale_id` vào mỗi dòng.
+- 3 view PHP: `rowHtml` gắn `data-blog` / `data-sale` + class `bctk-clickrow`.
+- `enqueue_assets` cho `VIEW_CSKH / VIEW_SALES / VIEW_SALESSUM` nạp
+  `bctk-phieu-modal.js` + `bctk-phieu-view.js`, localize `tgsBctkPhieuView`
+  (`ajaxUrl`, `nonce` = `TGS_BCTK_Ajax::NONCE`, `actorId`, `actorName`).
+- `bctk-phieu-view.js` — click `#bctkBody tr[data-sale]` → POST
+  `tgs_bctk_phieu_view` (`TGS_BCTK_Ajax::phieu_view()` → `vat_row_for_sale()`) →
+  `TGSBctkPhieuModal.open(row, { editable: canNote, editableLines: false,
+  onSaveNote, actions:[pdf] })`. Ghi chú lưu qua `tgs_bctk_vat_save_note` (đã có).
+
+### 6.5 Việc còn phải làm
 
 - Tự chỉnh **phiếu thu** khi tổng phiếu đổi (hiện chỉ cảnh báo).
 - **Gửi thuế / tách bill / gửi lại** chạy trong modal (hiện mở tab màn shop) —
@@ -283,9 +312,3 @@ không cần `switch_to_blog`.
 - **Điều chỉnh / thay thế** hoá đơn đã phát hành.
 - Endpoint PDF riêng cho hoá đơn điều chỉnh giảm.
 - Luồng trạng thái cuối "được cơ quan thuế chấp nhận".
-
-### 6.3 Modal là component dùng chung
-
-`bctk-phieu-modal.js` để dùng lại cho Sổ CSKH, Báo cáo/Tổng hợp bán hàng, menu
-Mua hàng... — mỗi màn chỉ truyền `payload` + mảng `actions` riêng. Tiền luôn
-theo `tgs_shop_management/docs/mo-hinh-tien-va-bang-local-ledger-item.md`.

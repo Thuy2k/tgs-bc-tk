@@ -348,6 +348,10 @@
 
 .bctk-table tbody tr:hover { background: #f6f9ff; }
 
+/* Dòng báo cáo bán hàng bấm được để mở lại phiếu (bctk-phieu-view.js) */
+.bctk-clickrow { cursor: pointer; }
+.bctk-clickrow.is-loading { opacity: .55; pointer-events: none; }
+
 .bctk-table .c-num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* Cột Số lượng đỏ đậm — giữ đúng thói quen nhìn từ phần mềm cũ */
