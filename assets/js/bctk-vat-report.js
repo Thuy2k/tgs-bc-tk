@@ -180,18 +180,23 @@
             api.toast('info', 'Đã mở màn "DS Gửi Thuế" của shop ở tab mới — thao tác ở đó rồi bấm "Tìm kiếm" lại để cập nhật.');
         }
 
-        // "Hoàn hàng" → mở màn "Lịch sử đơn hàng" của shop, bung sẵn đúng đơn.
-        // tgs_pos đọc ?open_code + ?open_date để đặt bộ lọc rồi tự viewOrderDetail.
-        function openPosOrders(r, api) {
-            if (!r.pos_orders_url) {
-                api.toast('error', 'Không có đường dẫn màn Lịch sử đơn hàng của shop này.');
-                return;
-            }
-            var q = '?open_code=' + encodeURIComponent(r.so_phieu_xuat || '');
-            var ymd = /^(\d{4}-\d{2}-\d{2})/.exec(String(r.ngay_xuat || ''));
-            if (ymd) { q += '&open_date=' + encodeURIComponent(ymd[1]); }
-            window.open(r.pos_orders_url + q, '_blank', 'noopener');
-            api.toast('info', 'Đã mở "Lịch sử đơn hàng" của shop kèm đơn ' + (r.so_phieu_xuat || '') + ' ở tab mới.');
+        // "Hoàn hàng" / "Điều chỉnh" → mở màn "Lịch sử đơn hàng" của shop, bung
+        // sẵn đúng đơn. tgs_pos đọc ?open_code + ?open_date để đặt bộ lọc rồi tự
+        // viewOrderDetail. Đơn ĐÃ phát hành: hoàn ở đó = sinh phiếu điều chỉnh
+        // giảm (hoặc kế toán chọn hoá đơn thay thế).
+        function openPosOrders(msg) {
+            return function (r, api) {
+                if (!r.pos_orders_url) {
+                    api.toast('error', 'Không có đường dẫn màn Lịch sử đơn hàng của shop này.');
+                    return;
+                }
+                var q = '?open_code=' + encodeURIComponent(r.so_phieu_xuat || '');
+                var ymd = /^(\d{4}-\d{2}-\d{2})/.exec(String(r.ngay_xuat || ''));
+                if (ymd) { q += '&open_date=' + encodeURIComponent(ymd[1]); }
+                window.open(r.pos_orders_url + q, '_blank', 'noopener');
+                api.toast('info', (msg || 'Đã mở "Lịch sử đơn hàng" của shop kèm đơn ')
+                    + (r.so_phieu_xuat || '') + ' ở tab mới.');
+            };
         }
 
         function soon(name) {
@@ -254,14 +259,18 @@
                 run: openPosTax
             },
             {
+                // Chưa phát hành: hoàn hàng thường (chưa dính hoá đơn thuế).
                 id: 'return', label: 'Hoàn hàng ↗',
-                when: function (r) { return !isAdjust && Number(r.sale_id) > 0; },
-                run: openPosOrders
+                when: function (r) { return notIssued(r) && Number(r.sale_id) > 0; },
+                run: openPosOrders('Đã mở "Lịch sử đơn hàng" để hoàn đơn ' )
             },
             {
-                id: 'adjust', label: 'Điều chỉnh',
+                // ĐÃ phát hành: bắt buộc phiếu điều chỉnh giảm (hoặc hoá đơn thay
+                // thế). Mở luôn màn đơn hàng của shop, bung sẵn đơn để kế toán
+                // bấm "Hoàn hàng" ngay tại đó → sinh phiếu điều chỉnh.
+                id: 'adjust', label: 'Điều chỉnh (hoàn hàng) ↗',
                 when: function (r) { return !isAdjust && issued(r); },
-                run: soon('Điều chỉnh hoá đơn')
+                run: openPosOrders('Đã mở "Lịch sử đơn hàng" để lập phiếu điều chỉnh giảm cho đơn ')
             },
             {
                 id: 'replace', label: 'Thay thế',

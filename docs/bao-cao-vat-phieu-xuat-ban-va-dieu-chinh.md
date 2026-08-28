@@ -176,15 +176,18 @@ kiếm" lại để cập nhật báo cáo.
 | Chưa phát hành / bill Z | **Sửa phiếu ↗** | mở màn DS Gửi Thuế của shop |
 | Chưa phát hành (không phải Z) | **Tách / chuyển bill Z ↗**, **Gửi hoá đơn thuế ↗** | mở màn DS Gửi Thuế của shop |
 | Gửi lỗi | **Gửi lại ↗** | mở màn DS Gửi Thuế của shop |
-| Mọi phiếu bán (không phải màn điều chỉnh) | **Hoàn hàng ↗** | mở màn "Lịch sử đơn hàng" của shop, bung sẵn đúng đơn |
-| Đã phát hành | **Xem PDF**, **Điều chỉnh**, **Thay thế** | PDF chạy thật; điều chỉnh/thay thế chờ chốt luồng |
+| **Chưa** phát hành | **Hoàn hàng ↗** | mở màn "Lịch sử đơn hàng" của shop, bung sẵn đúng đơn |
+| **Đã** phát hành | **Xem PDF**, **Điều chỉnh (hoàn hàng) ↗**, **Thay thế** | PDF chạy thật; "Điều chỉnh" mở màn đơn hàng của shop (hoàn ở đó = sinh phiếu điều chỉnh giảm); "Thay thế" chờ chốt luồng |
 
-**"Hoàn hàng ↗"** mở `get_home_url($blog_id, '/pos-orders/')` (payload
-`pos_orders_url`) kèm `?open_code=<local_ledger_code>&open_date=<YYYY-MM-DD ngày
-xuất>`. `pos-orders.php` (`maybeDeepLinkOpenOrder()` trong `DOMContentLoaded`)
-đọc 2 tham số này → đặt khoảng ngày + lọc cột "Mã", `loadOrders()`, rồi
-`viewOrderDetail()` đúng đơn để kế toán bấm "Hoàn hàng" ngay trong đó. Luồng hoàn
-vẫn chạy native trên site shop.
+**"Hoàn hàng ↗" / "Điều chỉnh (hoàn hàng) ↗"** — cùng một hành vi: mở
+`get_home_url($blog_id, '/pos-orders/')` (payload `pos_orders_url`) kèm
+`?open_code=<local_ledger_code>&open_date=<YYYY-MM-DD ngày xuất>`.
+`pos-orders.php` (`maybeDeepLinkOpenOrder()` trong `DOMContentLoaded`) đọc 2 tham
+số này → đặt khoảng ngày + lọc cột "Mã", `loadOrders()`, rồi `viewOrderDetail()`
+đúng đơn để kế toán bấm "Hoàn hàng" ngay trong đó. Đơn **đã phát hành** → thao
+tác hoàn tại đó sinh **phiếu điều chỉnh giảm**; đơn **chưa phát hành** → hoàn
+hàng thường. Luồng hoàn chạy native trên site shop. (Nút hiện theo trạng thái:
+chưa phát hành = "Hoàn hàng"; đã phát hành = "Điều chỉnh (hoàn hàng)".)
 
 ### 6.2 SỬA DÒNG HÀNG trong modal (đã có)
 
