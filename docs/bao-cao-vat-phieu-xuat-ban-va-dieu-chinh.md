@@ -258,8 +258,10 @@ cột (Enter ở dòng cuối = thêm dòng). Bấm **💾 Lưu** →
 > quầy mở lại bill sẽ thấy dòng hàng CŨ dù DB đã đúng.
 
 **Ghi chú phiếu** có nút **"✎ Sửa ghi chú"** riêng (dưới, khối Nhân viên & ghi
-chú) → textarea → `tgs_bctk_vat_save_note` (lưu đúng định dạng POS
-`Đơn POS <mã> | Ghi chú: …`).
+chú) → textarea → `tgs_bctk_vat_save_note` → lưu **THẲNG** vào
+`local_ledger_note` (đúng chữ kế toán nhập, rỗng ⇒ để trống). Không còn bọc
+`Đơn POS <mã> | Ghi chú:` — giống luồng POS mới. Đọc lại qua
+`extract_order_note()` (vẫn bóc được phiếu CŨ theo khuôn cũ).
 
 > ⚠️ Chỉ đụng **dòng hàng + tổng tiền phiếu**. Tồn kho hệ thống này suy từ
 > chính `local_ledger_item` nên tự khớp. **Phiếu thu KHÔNG tự chỉnh** — đổi tổng

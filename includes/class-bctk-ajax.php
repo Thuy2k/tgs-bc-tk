@@ -829,19 +829,13 @@ class TGS_BCTK_Ajax
     }
 
     /**
-     * Bóc lấy chữ người bán thật sự gõ ra khỏi ghi chú phiếu bán.
+     * Lấy chữ người bán/kế toán thật sự gõ ra khỏi local_ledger_note.
      *
-     * POS ghép sẵn tiêu đề vào rồi mới lưu, xem
-     * TGS_POS_Order_Handler::create_sale_ledger:
+     * Phiếu MỚI (từ 2026-08): local_ledger_note CHÍNH LÀ ghi chú, không bọc gì.
+     * Phiếu CŨ: "Đơn POS <mã> | Ghi chú: <note>" — bóc lấy phần sau; nếu chỉ có
+     * "Đơn POS <mã>" thì trả rỗng.
      *
-     *     Đơn POS HD3_A7H8C | Ghi chú: mày là của ai
-     *
-     * Mã đơn thì cột PBH đã có rồi; bày lại lần nữa chỉ tổ đẩy phần chữ thật ra
-     * ngoài tầm nhìn, đúng như đang bị.
-     *
-     * Quy tắc bóc giữ y hệt TGS_POS_Ajax_Order::extract_order_note(), kể cả
-     * nhánh phiếu cũ chưa có tiền tố — hai nơi tách khác nhau thì cùng một đơn
-     * lại hiện hai kiểu ghi chú, người dùng không biết tin cái nào.
+     * Quy tắc bóc giữ y hệt TGS_POS_Ajax_Order::extract_order_note().
      */
     private static function extract_order_note($raw_note)
     {
@@ -2718,11 +2712,13 @@ class TGS_BCTK_Ajax
         try {
             global $wpdb;
             $L = $wpdb->prefix . 'local_ledger';
-            $code = (string) $ctx['sale']['local_ledger_code'];
 
-            // Cùng định dạng POS: "Đơn POS <mã> | Ghi chú: <note>"
-            $stored = 'Đơn POS ' . $code . ($note !== '' ? ' | Ghi chú: ' . $note : '');
-            $wpdb->update($L, ['local_ledger_note' => $stored, 'updated_at' => current_time('mysql')],
+            /*
+             * Lưu THẲNG chữ kế toán nhập — giống luồng POS mới, không bọc
+             * "Đơn POS <mã> | Ghi chú:" nữa (mã phiếu đã có ở local_ledger_code).
+             * Rỗng ⇒ để trống. Xem tgs_pos: create_sale_ledger / build_ledger_note.
+             */
+            $wpdb->update($L, ['local_ledger_note' => $note, 'updated_at' => current_time('mysql')],
                 ['local_ledger_id' => $sale_id]);
 
             if ($switched) { restore_current_blog(); $switched = false; }
