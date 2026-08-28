@@ -115,7 +115,7 @@ sticky) xuyên qua:
 | Tiêu đề | mã phiếu · badge trạng thái VAT · nhãn BILL Z |
 | **Thanh hành động** (trên) | các nút sự kiện theo trạng thái (§6) + **⭳ Xuất Excel phiếu** + Đóng |
 | **Chứng từ** (trên) | Lý do · Kho/Mã shop · Số phiếu xuất · Ngày xuất · Số HĐ · Seri · Mẫu HĐ · Ngày HĐ · Hình thức TT · Trạng thái VAT · Tỷ lệ thuế · SL bản ghi — kèm dòng **ĐƠN VỊ BÁN HÀNG** (tên · MST · địa chỉ · ĐT). *("Số SO" đã bỏ — luôn trống, gây rối.)* |
-| **Dòng hàng** (giữa, cuộn riêng) | STT · Mã hàng · Tên hàng · Kho · ĐVT · SL · SL ĐVT · Đơn giá · CK · TT chưa thuế · Thuế suất · Tiền thuế · Thành tiền · Số lô · EXP · Ghi chú — tfoot: tổng từng cột |
+| **Dòng hàng** (giữa, cuộn riêng) | STT · Mã hàng · Tên hàng · Kho · ĐVT · SL · SL ĐVT · **ĐG bán** (đơn giá bán cho khách theo ĐVT — ĐÃ GỒM THUẾ, TRƯỚC chiết khấu, đúng như bill POS) · CK · TT chưa thuế · Thuế suất (chỉ tham khảo) · Tiền thuế · Thành tiền · Số lô · EXP · Ghi chú — tfoot: tổng từng cột |
 | **Đáy 3 cột** | ① Thông tin khách hàng (Mã KH/SĐT · Tên khách · Tên công ty · MST · Địa chỉ · ĐT · Email) ② **Nhân viên xuất** + userID xuất, **Người thao tác (đang can thiệp)** + userID thao tác (người đăng nhập — có thể là kế toán), Ghi chú phiếu ③ Tổng cộng: Tiền hàng · Thuế · Chiết khấu · **Tổng thanh toán** + bằng chữ |
 
 **⭳ Xuất Excel phiếu** — nút luôn có (khi không ở chế độ sửa): xuất `.xls`
@@ -335,9 +335,20 @@ Cách nối:
 ### 6.5 Xem lại phiếu ở 2 màn báo cáo MUA HÀNG (CHỈ ĐỌC) — base RIÊNG
 
 **Báo cáo mua hàng / Hàng trả nhà cung cấp · Tổng hợp mua hàng** — bấm một dòng
-→ mở lại **phiếu nhập kho** (`local_ledger_type = 1`, KHÔNG có phiếu cha). Vì cột
-mua khác hẳn bên bán nên có **component modal riêng** `bctk-phieu-mua-modal.js`
-(`window.TGSBctkPhieuMuaModal`):
+→ mở lại **phiếu nhập kho** (`local_ledger_type = 1`, KHÔNG có phiếu cha).
+
+> **Vì sao tách modal BÁN và modal MUA thành 2 base riêng** (không dùng chung):
+> cùng tên cột "Đơn giá" nhưng NGHĨA ngược nhau —
+> - **Bán**: "ĐG bán" = đơn giá bán cho khách theo ĐVT, **ĐÃ GỒM THUẾ, TRƯỚC
+>   chiết khấu** (số khách thấy trên bill; kế toán/khách quan tâm giá bán + thành
+>   tiền, cột thuế chỉ tham khảo).
+> - **Mua**: "Đơn giá" = giá trên hoá đơn NCC, **TRƯỚC thuế, TRƯỚC chiết khấu**
+>   (như lúc tạo phiếu nhập / HTsoft).
+>
+> Khối thông tin cũng khác (khách hàng vs nhà cung cấp), làm tròn khác (bán làm
+> tròn về đồng, mua giữ lẻ vì là giá vốn). Gộp một modal sẽ phải nhồi cờ điều
+> kiện khắp nơi — tách hẳn dễ đọc, dễ sửa hơn. Cả hai vẫn đi chung
+> `mo-hinh-tien-va-bang-local-ledger-item.md` + CSS `.pm-*`.
 
 - **Đơn giá = TRƯỚC thuế, TRƯỚC chiết khấu** (đúng như lúc tạo phiếu nhập / như
   HTsoft), không phải giá bán sau thuế như bên bán.
