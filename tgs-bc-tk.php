@@ -248,9 +248,14 @@ class TGS_BCTK_Plugin
                 true
             );
 
+            $actor = wp_get_current_user();
             wp_localize_script('tgs-bctk-vat-report', 'tgsBctkVatReport', [
-                'ajaxUrl' => admin_url('admin-ajax.php'),
-                'kind'    => $view === self::VIEW_VAT_ADJUST ? 'adjust' : 'sales',
+                'ajaxUrl'   => admin_url('admin-ajax.php'),
+                'kind'      => $view === self::VIEW_VAT_ADJUST ? 'adjust' : 'sales',
+                // Người đang đăng nhập thao tác báo cáo (có thể là kế toán, khác
+                // với nhân viên xuất phiếu gốc) — hiện ở khối "Nhân viên & ghi chú".
+                'actorId'   => (int) $actor->ID,
+                'actorName' => $actor->display_name ?: $actor->user_login,
             ]);
         }
 

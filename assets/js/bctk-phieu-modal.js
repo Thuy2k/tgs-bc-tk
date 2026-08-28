@@ -12,9 +12,14 @@
  *                                 //   nếu bỏ trống). Đặt false khi phiếu đã có
  *                                 //   phiếu hoàn con: chỉ sửa ghi chú.
  *          lockLinesNote: string, // câu giải thích vì sao khoá dòng hàng
+ *          actor: { id, name },   // người đang đăng nhập can thiệp phiếu (kế
+ *                                 //   toán) — hiện ở khối "Nhân viên & ghi chú"
+ *                                 //   và trong file Xuất Excel
  *          onSaveLines: fn(payload, lines, api),  // lưu dòng hàng
  *          onSaveNote:  fn(payload, noteText, api)// lưu ghi chú phiếu
  *        })
+ *   Nút "⭳ Xuất Excel phiếu" luôn có sẵn (khi không ở chế độ sửa) — xuất .xls
+ *   gồm khối chứng từ + bảng dòng hàng đang hiển thị.
  *   payload: dòng đã dựng ở server (TGS_BCTK_Ajax::build_vat_row), có `items`.
  *   actions[]: { id, label, cls, when(payload)->bool, run(payload, api) }
  *     api = { pdf, closePdf, toast, busy, close, applyRow(row), exitEdit() }
@@ -205,6 +210,7 @@
             acPick(acItems[parseInt($(this).data('i'), 10)]);
         });
         $m.on('click', '#pmNoteEdit', startNoteEdit);
+        $m.on('click', '#pmExport', exportPhieu);
         $m.on('scroll', '.pm-lines', acHide);
 
         $(document).on('keydown', function (e) {
@@ -243,6 +249,11 @@
             }
         }
 
+        if (!editing) {
+            if (acts.length) { acts.push('<span class="pm-actions__sep"></span>'); }
+            acts.push('<button type="button" class="bctk-btn" id="pmExport">⭳ Xuất Excel phiếu</button>');
+        }
+
         $('#pmActions').html(acts.join(''));
         $('#pmActionMsg').text('').removeAttr('data-type');
         if (!editing && !canLines && opts.lockLinesNote) {
@@ -258,7 +269,7 @@
             kv('Số hóa đơn', r.so_hd), kv('Seri', r.seri), kv('Mẫu HĐ', r.mau_hd),
             kv('Ngày hóa đơn', ngay(r.ngay_hd, true)), kv('Hình thức TT', r.httt),
             kv('Trạng thái VAT', r.trang_thai_vat), kv('Tỷ lệ thuế', rate(r.ty_le_thue)),
-            kv('Số SO', r.so_so), kv('SL bản ghi', (r.items || []).length)
+            kv('SL bản ghi', (r.items || []).length)
         ].join(''));
 
         $('#pmSeller').html(
@@ -401,7 +412,13 @@
             kv('Email', r.email_mua)
         ].join(''));
 
-        $('#pmStaff').html([kv('Nhân viên xuất', r.nv_ten), kv('userID xuất', r.user_id)].join(''));
+        var actor = opts.actor || {};
+        $('#pmStaff').html([
+            kv('Nhân viên xuất', r.nv_ten), kv('userID xuất', r.user_id),
+            (actor.name || actor.id)
+                ? kv('Người thao tác (đang can thiệp)', actor.name) + kv('userID thao tác', actor.id)
+                : ''
+        ].join(''));
 
         var note = String(r.ghi_chu || '').trim();
         $('#pmOrderNote').html('<span class="pm-f__k">Ghi chú phiếu</span>'
@@ -413,6 +430,75 @@
         $('#pmTotCk').text(money(r.tong_ck));
         $('#pmTotGrand').text(money(r.thanh_tien));
         $('#pmTotWords').text(r.thanh_tien_chu || '');
+    }
+
+    // ── Xuất Excel một phiếu (header + dòng hàng) ────────────────────────
+    // .xls dạng bảng HTML — Excel mở thẳng, không cần thư viện. Lấy đúng số
+    // liệu đang hiển thị trên modal (đã theo TGS_Money từ server).
+    function exportPhieu() {
+        var r = current;
+        if (!r) { return; }
+        var actor = opts.actor || {};
+
+        function hRow(k, v) {
+            return '<tr><td style="font-weight:bold;background:#f1f5f9">' + esc(k)
+                + '</td><td>' + esc(dash(v)) + '</td></tr>';
+        }
+        var head =
+            '<table border="1"><tbody>'
+            + hRow('Loại phiếu', (opts.title || 'Phiếu') + ' — Lý do ' + (r.ly_do || ''))
+            + hRow('Số phiếu xuất', r.so_phieu_xuat) + hRow('Kho / Mã shop', r.ma_shop)
+            + hRow('Ngày xuất', ngay(r.ngay_xuat, true))
+            + hRow('Số hóa đơn', r.so_hd) + hRow('Seri', r.seri) + hRow('Mẫu HĐ', r.mau_hd)
+            + hRow('Ngày hóa đơn', ngay(r.ngay_hd, true)) + hRow('Hình thức TT', r.httt)
+            + hRow('Trạng thái VAT', r.trang_thai_vat) + hRow('Tỷ lệ thuế', rate(r.ty_le_thue))
+            + hRow('Đơn vị bán hàng', dash(r.ten_cty_ban) + ' · MST ' + dash(r.mst_ban)
+                + ' · ' + dash(r.dchi_ban) + ' · ĐT ' + dash(r.dt_ban))
+            + hRow('Khách hàng', r.ten_kh) + hRow('Mã KH (SĐT)', r.ma_kh)
+            + hRow('Tên công ty bên mua', r.ten_cty_mua) + hRow('MST bên mua', r.mst_mua)
+            + hRow('Địa chỉ bên mua', r.dchi_mua) + hRow('Điện thoại bên mua', r.dt_mua)
+            + hRow('Email bên mua', r.email_mua)
+            + hRow('Nhân viên xuất', r.nv_ten + ' (uID ' + (r.user_id || '') + ')')
+            + (actor.name || actor.id
+                ? hRow('Người thao tác (đang can thiệp)', actor.name + ' (uID ' + (actor.id || '') + ')')
+                : '')
+            + hRow('Ghi chú phiếu', r.ghi_chu)
+            + hRow('Tiền hàng (chưa thuế)', money(r.tt_chua_thue))
+            + hRow('Tiền thuế', money(r.tong_thue)) + hRow('Chiết khấu', money(r.tong_ck))
+            + hRow('Tổng thanh toán', money(r.thanh_tien) + ' (' + (r.thanh_tien_chu || '') + ')')
+            + '</tbody></table>';
+
+        var cols = ['STT', 'Mã hàng', 'Tên hàng', 'Kho', 'ĐVT', 'SL', 'SL ĐVCB', 'Đơn giá',
+            'CK', 'TT chưa thuế', 'Thuế suất', 'Tiền thuế', 'Thành tiền', 'Số lô', 'EXP', 'Ghi chú'];
+        var body = '<table border="1"><thead><tr>'
+            + cols.map(function (c) { return '<th style="background:#e2e8f0">' + esc(c) + '</th>'; }).join('')
+            + '</tr></thead><tbody>';
+        (r.items || []).forEach(function (it, i) {
+            var cells = [
+                it.stt || (i + 1), it.ma_hang || '', it.ten || '', it.kho || '', it.dvt || '',
+                num(it.sl), num(it.sl_dvcb), num(it.don_gia), num(it.ck), num(it.tien_chua_thue),
+                taxDisplay(it.thue_suat), num(it.tien_thue), num(it.thanh_tien),
+                it.so_lo || '', it.exp || '', it.ghi_chu || ''
+            ];
+            body += '<tr>' + cells.map(function (v) { return '<td>' + esc(v) + '</td>'; }).join('') + '</tr>';
+        });
+        body += '</tbody></table>';
+
+        var html = '<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head>'
+            + '<meta charset="UTF-8"></head><body>'
+            + '<h3>Chi tiết phiếu ' + esc(r.so_phieu_xuat || '') + '</h3>'
+            + head + '<br>' + body + '</body></html>';
+
+        var blob = new Blob(['﻿', html], { type: 'application/vnd.ms-excel' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'phieu-' + (String(r.so_phieu_xuat || 'export').replace(/[^\w.-]+/g, '_')) + '.xls';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
+        api.toast('info', 'Đã xuất Excel phiếu ' + (r.so_phieu_xuat || '') + '.');
     }
 
     // ── sửa dòng hàng ─────────────────────────────────────────────────────

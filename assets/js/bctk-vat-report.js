@@ -364,6 +364,8 @@
                 lockLinesNote: canEdit(r) && !canEditLines(r)
                     ? 'Phiếu đã có phiếu hoàn con — chỉ sửa được ghi chú, không sửa dòng hàng.'
                     : '',
+                // Người đang đăng nhập can thiệp phiếu (kế toán) — khác nhân viên xuất gốc.
+                actor: { id: Number(CFG.actorId || 0), name: String(CFG.actorName || '') },
                 onSaveLines: saveLines,
                 onSaveNote: saveNote,
                 onSearchProduct: searchProduct,

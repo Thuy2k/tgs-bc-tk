@@ -113,10 +113,17 @@ sticky) xuyên qua:
 | Vùng | Nội dung |
 |---|---|
 | Tiêu đề | mã phiếu · badge trạng thái VAT · nhãn BILL Z |
-| **Thanh hành động** (trên) | các nút sự kiện theo trạng thái (§6) + Đóng |
-| **Chứng từ** (trên) | Lý do · Kho/Mã shop · Số phiếu xuất · Ngày xuất · Số HĐ · Seri · Mẫu HĐ · Ngày HĐ · Hình thức TT · Trạng thái VAT · Tỷ lệ thuế · Số SO · SL bản ghi — kèm dòng **ĐƠN VỊ BÁN HÀNG** (tên · MST · địa chỉ · ĐT) |
+| **Thanh hành động** (trên) | các nút sự kiện theo trạng thái (§6) + **⭳ Xuất Excel phiếu** + Đóng |
+| **Chứng từ** (trên) | Lý do · Kho/Mã shop · Số phiếu xuất · Ngày xuất · Số HĐ · Seri · Mẫu HĐ · Ngày HĐ · Hình thức TT · Trạng thái VAT · Tỷ lệ thuế · SL bản ghi — kèm dòng **ĐƠN VỊ BÁN HÀNG** (tên · MST · địa chỉ · ĐT). *("Số SO" đã bỏ — luôn trống, gây rối.)* |
 | **Dòng hàng** (giữa, cuộn riêng) | STT · Mã hàng · Tên hàng · Kho · ĐVT · SL · SL ĐVT · Đơn giá · CK · TT chưa thuế · Thuế suất · Tiền thuế · Thành tiền · Số lô · EXP · Ghi chú — tfoot: tổng từng cột |
-| **Đáy 3 cột** | ① Thông tin khách hàng (Mã KH/SĐT · Tên khách · Tên công ty · MST · Địa chỉ · ĐT · Email) ② Nhân viên xuất + userID + Ghi chú phiếu ③ Tổng cộng: Tiền hàng · Thuế · Chiết khấu · **Tổng thanh toán** + bằng chữ |
+| **Đáy 3 cột** | ① Thông tin khách hàng (Mã KH/SĐT · Tên khách · Tên công ty · MST · Địa chỉ · ĐT · Email) ② **Nhân viên xuất** + userID xuất, **Người thao tác (đang can thiệp)** + userID thao tác (người đăng nhập — có thể là kế toán), Ghi chú phiếu ③ Tổng cộng: Tiền hàng · Thuế · Chiết khấu · **Tổng thanh toán** + bằng chữ |
+
+**⭳ Xuất Excel phiếu** — nút luôn có (khi không ở chế độ sửa): xuất `.xls`
+(bảng HTML, Excel mở thẳng, không cần thư viện) gồm khối chứng từ + bên bán +
+bên mua + nhân viên/người thao tác + tổng cộng, rồi bảng 16 cột dòng hàng — đúng
+số đang hiển thị (đã theo `TGS_Money`). Tên file `phieu-<số phiếu xuất>.xls`.
+`actorId` / `actorName` do `tgs-bc-tk.php` `wp_localize_script` truyền
+(`wp_get_current_user()`), report chuyển vào modal qua `opts.actor`.
 
 Mỗi dòng hàng kèm `item_id` để base sửa/xoá bám vào. Tên hàng trống thì bồi từ
 catalog global (`TGS_BCTK_Report::product_info()`). Số lô / EXP lấy thêm từ
