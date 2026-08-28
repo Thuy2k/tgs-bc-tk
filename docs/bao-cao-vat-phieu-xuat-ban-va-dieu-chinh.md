@@ -191,14 +191,21 @@ cột (Enter ở dòng cuối = thêm dòng). Bấm **💾 Lưu** →
 1. `switch_to_blog` + đọc/ghi bảng theo `$wpdb->prefix` tươi (KHÔNG dùng
    `TGS_TABLE_*` — bám site tổng).
 2. Chặn nếu phiếu đã phát hành (trừ bill Z).
-3. Mỗi dòng: quy `(SL, Đơn giá, CK, Thuế suất)` — giá trị POS (sau thuế, trước
-   CK) — về 5 cột gốc bằng `TGS_Money::from_pos()`; UPDATE / INSERT / soft-DELETE
+3. Mỗi dòng: quy `(SL, Đơn giá, CK)` — giá trị POS (sau thuế, trước CK) — về 5
+   cột gốc bằng `TGS_Money::from_pos()` (thuế suất lấy như trên, không tin
+   client); **UPDATE / INSERT / DELETE VĨNH VIỄN** (`$wpdb->delete`, không soft)
    trên `local_ledger_item` của **phiếu xuất con** (type 2).
-4. Dựng lại `local_ledger_item_id` (JSON) + `local_ledger_total_amount` cho CẢ
-   phiếu bán (type 10) lẫn phiếu xuất con — tổng = `TGS_Money::total()['thanh_tien_dong']`.
-5. Đối chiếu tiền đã thu (phiếu thu type 7/8 đã duyệt); lệch ≥ 1đ → trả
+4. **Đồng bộ `local_ledger_item_id` (JSON) cho CẢ CÂY PHIẾU** — đúng như luồng
+   tạo đơn ở `tgs_pos` (`TGS_POS_Order_Handler::update_ledger_items`): danh sách
+   id dòng hàng phải giống hệt trên **phiếu bán (10)** và **mọi phiếu con**
+   (`local_ledger_parent_id = phiếu bán`) — phiếu xuất (2), phiếu thu (7), phiếu
+   chi (8)… Thêm/sửa/xoá là tất cả đi theo.
+5. `local_ledger_total_amount` chỉ ghi cho **phiếu bán + phiếu xuất**
+   (= `TGS_Money::total()['thanh_tien_dong']`); phiếu thu/chi giữ số tiền của
+   chính nó.
+6. Đối chiếu tiền đã thu (phiếu thu type 7/8 đã duyệt); lệch ≥ 1đ → trả
    **cảnh báo** để kế toán xử phiếu thu / công nợ.
-6. Trả về payload phiếu mới → modal cập nhật tại chỗ, bảng chạy lại tìm kiếm.
+7. Trả về payload phiếu mới → modal cập nhật tại chỗ, bảng chạy lại tìm kiếm.
 
 **Ghi chú phiếu** có nút **"✎ Sửa ghi chú"** riêng (dưới, khối Nhân viên & ghi
 chú) → textarea → `tgs_bctk_vat_save_note` (lưu đúng định dạng POS
@@ -215,8 +222,31 @@ là có ngay tính năng sửa.
 **Thêm dòng có gợi ý sản phẩm:** gõ vào ô **Mã hàng** hoặc **Tên hàng** (≥ 2 ký
 tự) → gợi ý từ catalog GLOBAL (`tgs_bctk_product_search` →
 `wp_global_product_name`, tìm theo sku / tên / barcode). Chọn (chuột hoặc ↓ ↑
-Enter) → tự điền sku · tên · ĐVT · đơn giá (nếu đang trống) · thuế suất (KCT
-hoặc %). Bảng global nên không cần `switch_to_blog`.
+Enter) → tự điền sku · tên · ĐVT · đơn giá (nếu đang trống). Bảng global nên
+không cần `switch_to_blog`.
+
+**ĐVT & đơn giá theo giỏ hàng `tgs_pos`:**
+- ĐVT là ô **chọn** trong các đơn vị của mã hàng (cấu hình bảng giá). Chọn sản
+  phẩm → mặc định **ĐVT ưu tiên** (`is_default_unit`, đánh dấu ★) + đơn giá của
+  ĐVT đó. Đổi ĐVT → tỷ lệ quy đổi + đơn giá tự cập nhật; kế toán sửa tiếp được.
+- Cột **SL** = số lượng theo ĐVT bán; **SL ĐVCB** = `SL × tỷ lệ` (chỉ hiện).
+  **Đơn giá** = giá 1 ĐVT (đã gồm thuế, trước CK) — như POS hiển thị.
+- Nguồn: `TGS_Price_List` (`wp_global_htsoft_stock_convert` +
+  `wp_global_htsoft_price_list_blog`) qua `tgs_bctk_product_units` /
+  `tgs_bctk_product_search`. **Lấy bảng giá của WEBSITE ĐANG SỬA** (site chạy báo
+  cáo) — `vat_save_lines` chốt `blog_id` này TRƯỚC khi `switch_to_blog` sang
+  site shop. Server quy `(SL_ĐVT, ĐVT, giá_ĐVT)` → `quantity` (ĐVCB) + `price`
+  (1 ĐVCB) + `local_ledger_item_unit_name/_quantity/_ratio` rồi mới
+  `TGS_Money::from_pos()`.
+
+**Thuế suất KHÔNG sửa tay** (cột chỉ hiển thị):
+- Dòng cũ → giữ đúng `local_ledger_item_tax_percent` / `_is_kct` đã lưu.
+- Dòng mới → server tra `wp_global_product_name.global_product_tax` /
+  `global_product_is_kct` theo mã hàng (đúng cấu hình ở *Cấu hình → Hàng hoá →
+  Quản lý thuế suất*). Không có cấu hình → 8%. `is_kct = 1` ⇒ thuế 0, cột hiện
+  "KCT".
+- Client gửi `thue_pct` lên chỉ để hiện tạm; `vat_save_lines` **luôn ghi đè**
+  bằng số ở trên.
 
 ### 6.3 Việc còn phải làm
 

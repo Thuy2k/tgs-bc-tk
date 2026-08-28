@@ -280,6 +280,17 @@
                 .catch(function () { cb([]); });
         }
 
+        function loadUnits(skus, cb) {
+            var fd = new FormData();
+            fd.append('action', 'tgs_bctk_product_units');
+            fd.append('nonce', (window.TGS_BCTK && window.TGS_BCTK.nonce) || '');
+            fd.append('skus', JSON.stringify(skus || []));
+            fetch(CFG.ajaxUrl, { method: 'POST', body: fd, credentials: 'same-origin' })
+                .then(function (res) { return res.json(); })
+                .then(function (out) { cb((out && out.success && out.data.units) || {}); })
+                .catch(function () { cb({}); });
+        }
+
         function saveNote(r, noteText, api) {
             var fd = new FormData();
             fd.append('action', 'tgs_bctk_vat_save_note');
@@ -314,6 +325,7 @@
                 onSaveLines: saveLines,
                 onSaveNote: saveNote,
                 onSearchProduct: searchProduct,
+                onLoadUnits: loadUnits,
                 /* Sau khi lưu: chạy lại tìm kiếm để bảng khớp với dữ liệu mới */
                 onRowUpdated: function () {
                     if ($('.bctk-site:checked').length) { $(document).trigger('bctk:search'); }

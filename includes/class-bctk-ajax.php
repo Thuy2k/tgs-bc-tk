@@ -86,6 +86,7 @@ class TGS_BCTK_Ajax
         add_action('wp_ajax_tgs_bctk_vat_save_lines', [__CLASS__, 'vat_save_lines']);
         add_action('wp_ajax_tgs_bctk_vat_save_note', [__CLASS__, 'vat_save_note']);
         add_action('wp_ajax_tgs_bctk_product_search', [__CLASS__, 'product_search']);
+        add_action('wp_ajax_tgs_bctk_product_units', [__CLASS__, 'product_units']);
         add_action('wp_ajax_tgs_bctk_refresh_nonce', [__CLASS__, 'refresh_nonce']);
     }
 
@@ -1370,18 +1371,23 @@ class TGS_BCTK_Ajax
                 $has_taxed = true;
             }
 
+            $_ratio = max(1.0, (float) ($it['ratio'] ?? 1));
+            $_sl_unit = (float) ($it['sl_dvt'] ?? 0);
+            if ($_sl_unit <= 0) { $_sl_unit = (float) ($it['qty'] ?? 0) / $_ratio; }
+
             $items[] = [
                 'stt'            => $stt++,
-                // Cột kế toán quen nhìn (bố cục phần mềm cũ) — để tiện làm base sửa phiếu
+                // Cột kế toán quen nhìn (bố cục phần mềm cũ), giống giỏ hàng tgs_pos
                 'ma_hang'        => (string) ($it['sku'] ?? ''),
                 'ten'            => (string) ($it['ten'] ?? ''),
                 'kho'            => $ma_shop,
                 'dvt'            => (string) ($it['dvt'] ?? ''),
-                'sl'             => $s((float) ($it['qty'] ?? 0)),
-                // SL theo ĐVT bán (lốc/vỉ/thùng) — cột "SL t" của phần mềm cũ
-                'sl_dvt'         => $s((float) ($it['sl_dvt'] ?? 0)) ?: $s((float) ($it['qty'] ?? 0) / max(1, (float) ($it['ratio'] ?? 1))),
-                // Đơn giá: bán → giá POS (trước CK, sau thuế); vẫn kèm giá gửi thuế
-                'don_gia'        => $mo['don_gia_sau_thue'],
+                'ratio'          => $_ratio,
+                // SL = theo ĐVT bán (lốc/vỉ/thùng); SL ĐVCB = quy về đơn vị nhỏ nhất
+                'sl'             => $s($_sl_unit),
+                'sl_dvcb'        => $s((float) ($it['qty'] ?? 0)),
+                // Đơn giá = giá 1 ĐVT bán (trước CK, sau thuế) — như POS hiển thị
+                'don_gia'        => $s(round($mo['don_gia_sau_thue'] * $_ratio)),
                 'don_gia_gui_thue' => $mo['don_gia_gui_thue'],
                 'ck'             => $s($mo['ck_hien']),
                 'tien_chua_thue' => $s($mo['tt_chua_thue']),
@@ -1906,6 +1912,13 @@ class TGS_BCTK_Ajax
             wp_send_json_error(['message' => 'Danh sách dòng hàng không hợp lệ.'], 400);
         }
 
+        // Bảng giá / ĐVT lấy theo WEBSITE ĐANG SỬA (site hiện tại), chốt TRƯỚC
+        // khi switch_to_blog sang site shop.
+        $report_blog = get_current_blog_id();
+        $unit_cfg = self::unit_configs_for(array_map(static function ($ln) {
+            return (string) ($ln['ma_hang'] ?? '');
+        }, $lines), $report_blog);
+
         $switched = false;
         $ctx = self::vat_edit_context($blog_id, $sale_id, $switched);
 
@@ -1921,37 +1934,98 @@ class TGS_BCTK_Ajax
             $now = current_time('mysql');
             $uid = get_current_user_id();
 
-            // id các dòng đang thuộc phiếu xuất (để chặn sửa nhầm phiếu khác)
-            $own = array_map('intval', (array) $wpdb->get_col($wpdb->prepare(
-                "SELECT local_ledger_item_id FROM {$LI}
+            // Dòng đang thuộc phiếu xuất + thuế suất ĐÃ LƯU của từng dòng.
+            // Thuế suất KHÔNG cho client sửa: dòng cũ giữ nguyên số đã lưu,
+            // dòng mới lấy theo cấu hình mã hàng (wp_global_product_name).
+            $own = [];
+            foreach ((array) $wpdb->get_results($wpdb->prepare(
+                "SELECT local_ledger_item_id AS id,
+                        COALESCE(local_ledger_item_tax_percent, 0) AS pct,
+                        COALESCE(local_ledger_item_is_kct, 0)      AS kct
+                   FROM {$LI}
                   WHERE local_ledger_id = %d AND (is_deleted = 0 OR is_deleted IS NULL)",
                 $export_id
-            )));
-            $own = array_flip($own);
+            ), ARRAY_A) as $o) {
+                $own[(int) $o['id']] = ['pct' => (float) $o['pct'], 'kct' => (int) $o['kct']];
+            }
+
+            // Thuế suất cấu hình cho các mã hàng của dòng MỚI
+            $gp_table = $wpdb->base_prefix . 'global_product_name';
+            $new_skus = [];
+            foreach ($lines as $ln) {
+                if ((int) ($ln['item_id'] ?? 0) === 0 && empty($ln['del'])) {
+                    $sk = trim((string) ($ln['ma_hang'] ?? ''));
+                    if ($sk !== '') { $new_skus[$sk] = true; }
+                }
+            }
+            $gp_tax = [];
+            if (!empty($new_skus)
+                && $wpdb->get_var("SHOW TABLES LIKE '" . esc_sql($gp_table) . "'") === $gp_table) {
+                $sk_list = array_keys($new_skus);
+                $ph = implode(',', array_fill(0, count($sk_list), '%s'));
+                foreach ((array) $wpdb->get_results($wpdb->prepare(
+                    "SELECT global_product_sku AS sku,
+                            COALESCE(global_product_tax, 8)    AS pct,
+                            COALESCE(global_product_is_kct, 0) AS kct
+                       FROM {$gp_table} WHERE global_product_sku IN ({$ph})",
+                    ...$sk_list
+                ), ARRAY_A) as $g) {
+                    $gp_tax[(string) $g['sku']] = ['pct' => (float) $g['pct'], 'kct' => (int) $g['kct']];
+                }
+            }
 
             foreach ($lines as $ln) {
                 $id  = (int) ($ln['item_id'] ?? 0);
                 $del = !empty($ln['del']);
-                $qty = max(0, (float) ($ln['sl'] ?? 0));
-                $gia = max(0, (float) ($ln['don_gia'] ?? 0));   // POS: sau thuế, trước CK, 1 ĐVCB
-                $ck  = max(0, (float) ($ln['ck'] ?? 0));         // sau thuế, cả dòng
-                $pct = ($ln['thue_pct'] === '' || $ln['thue_pct'] === null || $ln['thue_pct'] === 'KCT')
-                    ? 0.0 : (float) $ln['thue_pct'];
-                $is_kct = (isset($ln['thue_pct']) && $ln['thue_pct'] === 'KCT') ? 1 : 0;
+                $sl_unit  = max(0, (float) ($ln['sl'] ?? 0));         // SL theo ĐVT bán
+                $gia_unit = max(0, (float) ($ln['don_gia'] ?? 0));   // giá 1 ĐVT, đã gồm thuế, trước CK
+                $ck  = max(0, (float) ($ln['ck'] ?? 0));             // sau thuế, cả dòng
                 $sku = sanitize_text_field((string) ($ln['ma_hang'] ?? ''));
                 $ten = sanitize_text_field((string) ($ln['ten'] ?? ''));
+                $dvt = sanitize_text_field((string) ($ln['dvt'] ?? ''));
+
+                // ── ĐVT ưu tiên & TỶ LỆ QUY ĐỔI (giống giỏ hàng tgs_pos) ──
+                // Tỷ lệ lấy theo cấu hình bảng giá của WEBSITE HIỆN TẠI, khớp
+                // theo tên ĐVT; không khớp thì dùng tỷ lệ client gửi, cuối cùng 1.
+                $ratio = 0.0;
+                foreach ((array) ($unit_cfg[$sku] ?? []) as $uc) {
+                    if (strcasecmp((string) $uc['unit'], $dvt) === 0) {
+                        $ratio = (float) $uc['ratio'];
+                        break;
+                    }
+                }
+                if ($ratio <= 0) { $ratio = (float) ($ln['ratio'] ?? 0); }
+                if ($ratio <= 0) { $ratio = 1.0; }
+
+                // Quy về ĐVCB cho đúng mô hình tiền
+                $qty = $sl_unit * $ratio;                          // SL theo ĐVCB
+                $gia = $ratio > 0 ? $gia_unit / $ratio : $gia_unit; // giá 1 ĐVCB (đã gồm thuế)
+
+                // ── THUẾ SUẤT KHÔNG LẤY TỪ CLIENT ──
+                // dòng cũ: giữ số đã lưu; dòng mới: theo cấu hình mã hàng
+                if ($id > 0 && isset($own[$id])) {
+                    $pct = (float) $own[$id]['pct'];
+                    $is_kct = (int) $own[$id]['kct'];
+                } elseif (isset($gp_tax[$sku])) {
+                    $pct = (float) $gp_tax[$sku]['pct'];
+                    $is_kct = (int) $gp_tax[$sku]['kct'];
+                } else {
+                    $pct = 8.0;   // không có cấu hình → mức phổ biến
+                    $is_kct = 0;
+                }
+                if ($is_kct === 1) { $pct = 0.0; }
                 $lo  = sanitize_text_field((string) ($ln['so_lo'] ?? ''));
                 $exp = sanitize_text_field((string) ($ln['exp'] ?? ''));
                 $exp = preg_match('/^\d{4}-\d{2}-\d{2}/', $exp) ? substr($exp, 0, 10) : null;
                 $note = sanitize_textarea_field((string) ($ln['ghi_chu'] ?? ''));
-                $dvt = sanitize_text_field((string) ($ln['dvt'] ?? ''));
 
                 if ($id > 0 && !isset($own[$id])) {
                     continue; // không phải dòng của phiếu này
                 }
 
                 if ($del && $id > 0) {
-                    $wpdb->update($LI, ['is_deleted' => 1, 'deleted_at' => $now, 'updated_at' => $now], ['local_ledger_item_id' => $id]);
+                    // Kế toán cấp cao yêu cầu XOÁ VĨNH VIỄN dòng hàng
+                    $wpdb->delete($LI, ['local_ledger_item_id' => $id], ['%d']);
                     continue;
                 }
 
@@ -1964,6 +2038,10 @@ class TGS_BCTK_Ajax
                     'local_ledger_item_tax_amount'      => $m['tax'],
                     'local_ledger_item_is_kct'          => $is_kct,
                     'local_ledger_item_note'            => $note,
+                    // ĐVT bán — cặp đi cùng: quantity(ĐVCB) = unit_quantity × unit_ratio
+                    'local_ledger_item_unit_name'       => $dvt,
+                    'local_ledger_item_unit_quantity'   => $sl_unit,
+                    'local_ledger_item_unit_ratio'      => $ratio,
                     'lot_code'  => $lo !== '' ? $lo : null,
                     'exp_date'  => $exp,
                     'updated_at' => $now,
@@ -1977,9 +2055,6 @@ class TGS_BCTK_Ajax
                     $wpdb->insert($LI, array_merge($data, [
                         'local_ledger_id' => $export_id,
                         'local_ledger_item_type' => 2,
-                        'local_ledger_item_unit_quantity' => $qty,
-                        'local_ledger_item_unit_ratio'    => 1,
-                        'local_ledger_item_unit_name'     => $dvt,
                         'local_ledger_item_gift_type'     => 0,
                         'user_id'    => $uid,
                         'is_deleted' => 0,
@@ -2006,12 +2081,31 @@ class TGS_BCTK_Ajax
             $tot = TGS_Money::total($live);
             $grand = (float) $tot['thanh_tien_dong'];
 
-            foreach ([$sale_id, $export_id] as $lid) {
-                $wpdb->update($L, [
-                    'local_ledger_item_id'     => $ids_json,
-                    'local_ledger_total_amount' => $grand,
-                    'updated_at' => $now,
-                ], ['local_ledger_id' => $lid]);
+            /*
+             * ─── ĐỒNG BỘ local_ledger_item_id CHO CẢ CÂY PHIẾU ─────────────
+             *
+             * Đúng như luồng tạo đơn ở tgs_pos (update_ledger_items): danh sách
+             * id dòng hàng phải giống hệt nhau trên PHIẾU BÁN và MỌI phiếu con
+             * (local_ledger_parent_id = phiếu bán) — phiếu xuất, phiếu thu,
+             * phiếu chi… Thêm/sửa/xoá dòng thì tất cả đi theo.
+             *
+             * Tổng tiền (local_ledger_total_amount) chỉ ghi cho PHIẾU BÁN và
+             * PHIẾU XUẤT; phiếu thu/chi giữ số tiền của chính nó (tiền đã thu),
+             * không phải tổng đơn.
+             */
+            $children = array_map('intval', (array) $wpdb->get_col($wpdb->prepare(
+                "SELECT local_ledger_id FROM {$L}
+                  WHERE local_ledger_parent_id = %d AND (is_deleted = 0 OR is_deleted IS NULL)",
+                $sale_id
+            )));
+            $all_ledgers = array_values(array_unique(array_merge([$sale_id], $children)));
+
+            foreach ($all_ledgers as $lid) {
+                $fields = ['local_ledger_item_id' => $ids_json, 'updated_at' => $now];
+                if ($lid === $sale_id || $lid === $export_id) {
+                    $fields['local_ledger_total_amount'] = $grand;
+                }
+                $wpdb->update($L, $fields, ['local_ledger_id' => $lid]);
             }
 
             // Đối chiếu tiền đã thu
@@ -2090,18 +2184,90 @@ class TGS_BCTK_Ajax
             $exact, $like, $like, $like, $like, $exact, $exact
         ), ARRAY_A) ?: [];
 
-        $items = array_map(static function ($r) {
+        $skus = array_map(static function ($r) { return (string) $r['sku']; }, $rows);
+        $units = self::unit_configs_for($skus);
+
+        $items = array_map(static function ($r) use ($units) {
+            $sku = (string) $r['sku'];
             return [
-                'sku'   => (string) $r['sku'],
+                'sku'   => $sku,
                 'name'  => (string) $r['name'],
                 'unit'  => (string) $r['unit'],
                 'price' => (float) $r['price'],
                 'tax'   => ($r['tax'] === null || $r['tax'] === '') ? null : (float) $r['tax'],
                 'is_kct' => (int) $r['is_kct'] === 1,
+                'units' => $units[$sku] ?? [],
             ];
         }, $rows);
 
         wp_send_json_success(['items' => $items]);
+    }
+
+    /**
+     * Cấu hình ĐVT bán + giá theo ĐVT của các mã hàng — LẤY THEO BẢNG GIÁ CỦA
+     * WEBSITE HIỆN TẠI (site đang chạy báo cáo), KHÔNG cần vào site shop.
+     *
+     * Nguồn: TGS_Price_List (wp_global_htsoft_stock_convert +
+     * wp_global_htsoft_price_list_blog) — "nơi duy nhất" lấy ĐVT bán + giá,
+     * xem tgs_shop_management/docs/gia-va-don-vi-tinh.md.
+     *
+     * @return array [sku => [ ['unit','ratio','price','is_default'], … ]]
+     */
+    private static function unit_configs_for(array $skus, $blog_id = null)
+    {
+        $skus = array_values(array_unique(array_filter(array_map('strval', $skus))));
+        if (empty($skus)) {
+            return [];
+        }
+
+        if (!class_exists('TGS_Price_List')) {
+            $file = WP_PLUGIN_DIR . '/tgs_shop_management/functions/class-tgs-price-list.php';
+            if (file_exists($file)) {
+                require_once $file;
+            }
+        }
+        if (!class_exists('TGS_Price_List')) {
+            return [];
+        }
+
+        // $blog_id: truyền rõ khi đã switch_to_blog (site đang sửa phiếu ≠ site shop)
+        $raw = TGS_Price_List::unit_configs_by_skus($skus, $blog_id);
+        $out = [];
+        foreach ($raw as $sku => $cfgs) {
+            $list = [];
+            foreach ((array) $cfgs as $c) {
+                $unit = trim((string) ($c['unit'] ?? ''));
+                if ($unit === '') {
+                    continue;
+                }
+                $ratio = (float) ($c['ratio'] ?? 1);
+                if ($ratio <= 0) {
+                    $ratio = 1.0;
+                }
+                $list[] = [
+                    'unit'       => $unit,
+                    'ratio'      => $ratio,
+                    // giá 1 ĐVT (đã gồm thuế như lúc cấu hình); null thì suy từ giá ĐVCB
+                    'price'      => ($c['unit_price'] === null)
+                        ? null : (float) $c['unit_price'],
+                    'is_default' => ((int) ($c['is_default_unit'] ?? 0) === 1) ? 1 : 0,
+                ];
+            }
+            $out[(string) $sku] = $list;
+        }
+        return $out;
+    }
+
+    /** Cấu hình ĐVT cho một loạt mã hàng (khi vào chế độ sửa) */
+    public static function product_units()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền.'], 403);
+        }
+        $skus = json_decode((string) wp_unslash($_POST['skus'] ?? '[]'), true);
+        $skus = is_array($skus) ? $skus : [];
+        wp_send_json_success(['units' => self::unit_configs_for($skus)]);
     }
 
     public static function vat_save_note()

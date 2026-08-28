@@ -69,18 +69,21 @@
     }
     function dash(v) { return (v === 0 || v) && String(v).trim() !== '' ? String(v) : '—'; }
 
-    /* Tính tạm tiền một dòng theo giá trị kế toán vừa gõ (POS: sau thuế, trước CK).
+    /* Tính tạm tiền một dòng theo giá trị kế toán vừa gõ.
+       ln.sl = SL theo ĐVT bán · ln.don_gia = giá 1 ĐVT (đã gồm thuế, trước CK)
+       ln.ck = chiết khấu cả dòng (đã gồm thuế) · ln.ratio = số ĐVCB / 1 ĐVT.
        Server mới là nơi chốt (TGS_Money::from_pos) — đây chỉ để hiện ngay. */
     function calcLine(ln) {
-        var qty = num(ln.sl);
+        var ratio = num(ln.ratio) || 1;
+        var qtyBase = num(ln.sl) * ratio;
         var pct = (ln.thue_pct === 'KCT' || ln.thue_pct === '' || ln.thue_pct == null) ? 0 : num(ln.thue_pct);
         var heso = 1 + pct / 100;
-        var price = num(ln.don_gia) / heso;
+        var priceBase = (num(ln.don_gia) / ratio) / heso;
         var disc = num(ln.ck) / heso;
-        var sauCk = qty * price - disc;
+        var sauCk = qtyBase * priceBase - disc;
         var thue = Math.round(sauCk * pct / 100);
         var tt = Math.round(sauCk + thue);
-        return { tien_chua_thue: tt - thue, tien_thue: thue, thanh_tien: tt };
+        return { qtyBase: qtyBase, tien_chua_thue: tt - thue, tien_thue: thue, thanh_tien: tt };
     }
 
     // ── Dựng khung một lần ───────────────────────────────────────────────────
@@ -115,11 +118,21 @@
         +     '<div class="pm-doc__seller" id="pmSeller"></div>'
         +   '</div>'
 
-        +   '<div class="pm-lines" data-ds-no-export data-ds-no-colcfg data-ds-no-filter>'
-        +     '<table class="pm-lines__table" data-ds-no-grid data-ds-no-export data-ds-no-colcfg data-ds-no-filter>'
+        +   '<div class="pm-lines" data-ds-no-export data-ds-no-colcfg data-ds-no-filter data-ds-no-resize>'
+        +     '<table class="pm-lines__table" data-ds-no-grid data-ds-no-export data-ds-no-colcfg data-ds-no-filter data-ds-no-resize>'
+        // Bề ngang cột CỐ ĐỊNH bằng colgroup — header & body luôn thẳng hàng,
+        // cả bảng cuộn ngang như một khối, không dính bộ kéo cột của DS.
+        +       '<colgroup>'
+        +         '<col style="width:46px"><col style="width:118px"><col style="width:220px">'
+        +         '<col style="width:52px"><col style="width:116px"><col style="width:64px">'
+        +         '<col style="width:78px"><col style="width:104px"><col style="width:92px">'
+        +         '<col style="width:112px"><col style="width:82px"><col style="width:92px">'
+        +         '<col style="width:104px"><col style="width:96px"><col style="width:130px">'
+        +         '<col style="width:220px">'
+        +       '</colgroup>'
         +       '<thead><tr>'
         +         '<th>STT</th><th>Mã hàng</th><th>Tên hàng</th><th>Kho</th><th>ĐVT</th>'
-        +         '<th class="c-num">SL</th><th class="c-num">SL ĐVT</th>'
+        +         '<th class="c-num">SL</th><th class="c-num">SL ĐVCB</th>'
         +         '<th class="c-num">Đơn giá</th><th class="c-num">CK</th>'
         +         '<th class="c-num">TT chưa thuế</th><th class="c-num">Thuế suất</th>'
         +         '<th class="c-num">Tiền thuế</th><th class="c-num">Thành tiền</th>'
@@ -247,14 +260,13 @@
     }
 
     // ── render: dòng hàng ─────────────────────────────────────────────────
-    function taxSelect(val) {
-        var opt = ['0', '5', '8', '10', 'KCT'];
-        var cur = (val === 'KCT') ? 'KCT' : String(num(val) || 0);
-        return '<select class="pm-line__in" data-col="thue_pct">'
-            + opt.map(function (o) {
-                return '<option value="' + o + '"' + (o === cur ? ' selected' : '') + '>'
-                    + (o === 'KCT' ? 'KCT' : o + '%') + '</option>';
-            }).join('') + '</select>';
+    /* Thuế suất KHÔNG cho sửa tay: dòng cũ theo item đã lưu, dòng mới tự lấy
+       theo cấu hình mã hàng (Cấu hình → Hàng hoá → Quản lý thuế suất). */
+    function taxDisplay(v) {
+        if (v === 'KCT') { return 'KCT'; }
+        if (v === 'Chưa khai') { return 'Chưa khai'; }
+        if (v === '' || v == null) { return '—'; }
+        return (num(v) || 0) + '%';
     }
 
     function renderLines(r) {
@@ -267,7 +279,7 @@
                     + '<td>' + esc(it.kho || '') + '</td>'
                     + '<td>' + esc(it.dvt || '') + '</td>'
                     + '<td class="c-num">' + fmt(it.sl) + '</td>'
-                    + '<td class="c-num">' + fmt(it.sl_dvt) + '</td>'
+                    + '<td class="c-num">' + fmt(it.sl_dvcb) + '</td>'
                     + '<td class="c-num">' + fmt(it.don_gia) + '</td>'
                     + '<td class="c-num">' + fmt(it.ck) + '</td>'
                     + '<td class="c-num">' + fmt(it.tien_chua_thue) + '</td>'
@@ -293,18 +305,29 @@
                 return '<input class="pm-line__in" data-col="' + col + '" data-i="' + i + '" '
                     + (extra || '') + ' value="' + esc(v == null ? '' : v) + '">';
             }
+            function dvtCell() {
+                var us = ln.units || [];
+                if (!us.length) { return inp('dvt', ln.dvt); }
+                return '<select class="pm-line__in" data-col="dvt" data-i="' + i + '">'
+                    + us.map(function (u) {
+                        return '<option value="' + esc(u.unit) + '"'
+                            + (u.unit === ln.dvt ? ' selected' : '') + '>' + esc(u.unit)
+                            + (u.is_default ? ' ★' : '') + '</option>';
+                    }).join('') + '</select>';
+            }
             return '<tr data-i="' + i + '">'
                 + '<td><button type="button" class="pm-line__del" data-i="' + i + '" title="Xoá dòng">✕</button> ' + (i + 1) + '</td>'
                 + '<td>' + inp('ma_hang', ln.ma_hang) + '</td>'
                 + '<td>' + inp('ten', ln.ten) + '</td>'
                 + '<td>' + esc(ln.kho || current.ma_shop || '') + '</td>'
-                + '<td>' + inp('dvt', ln.dvt) + '</td>'
+                + '<td>' + dvtCell() + '</td>'
                 + '<td class="c-num">' + inp('sl', ln.sl, 'type="number" step="any" inputmode="decimal"') + '</td>'
-                + '<td class="c-num pm-ro">—</td>'
+                + '<td class="c-num pm-ro" data-out="qtyBase">' + fmt(c.qtyBase) + '</td>'
                 + '<td class="c-num">' + inp('don_gia', ln.don_gia, 'type="number" step="any" inputmode="decimal"') + '</td>'
                 + '<td class="c-num">' + inp('ck', ln.ck, 'type="number" step="any" inputmode="decimal"') + '</td>'
                 + '<td class="c-num pm-ro" data-out="tien_chua_thue">' + fmt(c.tien_chua_thue) + '</td>'
-                + '<td class="c-num">' + taxSelect(ln.thue_pct) + '</td>'
+                + '<td class="c-num pm-ro" title="Tự lấy theo cấu hình mã hàng — không sửa tay">'
+                    + esc(taxDisplay(ln.thue_pct)) + '</td>'
                 + '<td class="c-num pm-ro" data-out="tien_thue">' + fmt(c.tien_thue) + '</td>'
                 + '<td class="c-num pm-ro" data-out="thanh_tien">' + fmt(c.thanh_tien) + '</td>'
                 + '<td>' + inp('so_lo', ln.so_lo) + '</td>'
@@ -386,16 +409,59 @@
             return {
                 item_id: it.item_id || 0, _del: false,
                 ma_hang: it.ma_hang || '', ten: it.ten || '', dvt: it.dvt || '', kho: it.kho || '',
-                sl: it.sl, don_gia: it.don_gia,
-                ck: it.ck, thue_pct: (it.thue_suat === 'KCT' ? 'KCT' : (it.thue_suat === 'Chưa khai' ? 8 : it.thue_suat)),
-                so_lo: it.so_lo || '', exp: it.exp || '', ghi_chu: it.ghi_chu || ''
+                sl: it.sl, ratio: num(it.ratio) || 1, don_gia: it.don_gia,
+                ck: it.ck, thue_pct: it.thue_suat, /* chỉ để hiển thị + tính tạm; server chốt lại */
+                so_lo: it.so_lo || '', exp: it.exp || '', ghi_chu: it.ghi_chu || '',
+                units: []
             };
         });
         editing = true;
         renderToolbar(current);
         renderLines(current);
         renderFoot(current);
+        $('#pmActionMsg').text('Thuế suất & ĐVT theo cấu hình mã hàng (bảng giá website hiện tại). Gõ Mã hàng / Tên hàng để chọn sản phẩm.');
         setTimeout(function () { $('#pmLinesBody .pm-line__in[data-col="sl"]').first().focus(); }, 30);
+
+        // Nạp cấu hình ĐVT cho các mã hàng đang có → ĐVT thành ô chọn
+        if (typeof opts.onLoadUnits === 'function') {
+            var skus = [];
+            editLines.forEach(function (l) {
+                var s = String(l.ma_hang || '').trim();
+                if (s && skus.indexOf(s) === -1) { skus.push(s); }
+            });
+            if (skus.length) {
+                opts.onLoadUnits(skus, function (map) {
+                    if (!editing) { return; }
+                    editLines.forEach(function (l) {
+                        var us = (map && map[String(l.ma_hang || '').trim()]) || [];
+                        if (us.length) {
+                            l.units = us;
+                            var cur = pickUnit(us, l.dvt);
+                            if (cur) { l.ratio = cur.ratio; }
+                        }
+                    });
+                    renderLines(current);
+                });
+            }
+        }
+    }
+
+    /* Chọn ĐVT: đúng tên đang có → giữ; không thì ĐVT ưu tiên (★) → tỷ lệ 1 → đầu */
+    function pickUnit(units, name) {
+        units = units || [];
+        var byName = name ? units.filter(function (u) { return u.unit === name; })[0] : null;
+        if (byName) { return byName; }
+        return units.filter(function (u) { return u.is_default; })[0]
+            || units.filter(function (u) { return Math.abs(u.ratio - 1) < 0.0005; })[0]
+            || units[0] || null;
+    }
+
+    /* Giá 1 ĐVT: ưu tiên unit_price cấu hình; null thì suy từ đơn vị khác có giá */
+    function unitPrice(units, u) {
+        if (u && u.price != null) { return u.price; }
+        var withPrice = (units || []).filter(function (x) { return x.price != null && x.ratio > 0; })[0];
+        if (withPrice && u) { return Math.round(withPrice.price / withPrice.ratio * u.ratio); }
+        return 0;
     }
 
     function cancelEdit() {
@@ -410,7 +476,7 @@
     function addLine() {
         editLines.push({
             item_id: 0, _del: false, ma_hang: '', ten: '', dvt: '', kho: current.ma_shop || '',
-            sl: 1, don_gia: 0, ck: 0, thue_pct: 8, so_lo: '', exp: '', ghi_chu: ''
+            sl: 1, ratio: 1, don_gia: 0, ck: 0, thue_pct: '', so_lo: '', exp: '', ghi_chu: '', units: []
         });
         renderLines(current);
         setTimeout(function () {
@@ -430,12 +496,25 @@
         var $in = $(e.target);
         var i = parseInt($in.data('i'), 10);
         var col = $in.data('col');
-        if (!editLines[i]) { return; }
-        editLines[i][col] = $in.val();
+        var ln = editLines[i];
+        if (!ln) { return; }
+        ln[col] = $in.val();
+
+        // Đổi ĐVT → tỷ lệ + đơn giá theo cấu hình, rồi vẽ lại cả bảng
+        if (col === 'dvt' && (ln.units || []).length) {
+            var u = pickUnit(ln.units, ln.dvt);
+            if (u) {
+                ln.ratio = u.ratio;
+                ln.don_gia = unitPrice(ln.units, u);   // hệ thống tự set; kế toán sửa tiếp được
+            }
+            renderLines(current);
+            return;
+        }
 
         // cập nhật ô tính của đúng dòng đó
-        var c = calcLine(editLines[i]);
+        var c = calcLine(ln);
         var $tr = $in.closest('tr');
+        $tr.find('[data-out="qtyBase"]').text(fmt(c.qtyBase));
         $tr.find('[data-out="tien_chua_thue"]').text(fmt(c.tien_chua_thue));
         $tr.find('[data-out="tien_thue"]').text(fmt(c.tien_thue));
         $tr.find('[data-out="thanh_tien"]').text(fmt(c.thanh_tien));
@@ -535,12 +614,25 @@
     function acPick(it) {
         if (!it || !acTarget) { return; }
         var i = parseInt(acTarget.data('i'), 10);
-        if (!editLines[i]) { return; }
-        editLines[i].ma_hang = it.sku;
-        editLines[i].ten = it.name;
-        if (it.unit) { editLines[i].dvt = it.unit; }
-        if (!num(editLines[i].don_gia)) { editLines[i].don_gia = it.price || 0; }
-        editLines[i].thue_pct = it.is_kct ? 'KCT' : (it.tax != null ? it.tax : editLines[i].thue_pct);
+        var ln = editLines[i];
+        if (!ln) { return; }
+        ln.ma_hang = it.sku;
+        ln.ten = it.name;
+        ln.thue_pct = it.is_kct ? 'KCT' : (it.tax != null ? it.tax : ln.thue_pct);
+
+        // ĐVT + giá theo cấu hình bảng giá (ĐVT ưu tiên); rơi về ĐVT/giá catalog
+        var us = it.units || [];
+        ln.units = us;
+        if (us.length) {
+            var def = pickUnit(us, null);
+            ln.dvt = def.unit;
+            ln.ratio = def.ratio;
+            ln.don_gia = unitPrice(us, def);
+        } else {
+            if (it.unit) { ln.dvt = it.unit; }
+            ln.ratio = 1;
+            if (!num(ln.don_gia)) { ln.don_gia = it.price || 0; }
+        }
         acHide();
         renderLines(current);
         setTimeout(function () { focusCell(i, 'sl'); }, 20);
@@ -553,7 +645,7 @@
             .map(function (l) {
                 return {
                     item_id: l.item_id || 0, del: l._del ? 1 : 0,
-                    ma_hang: l.ma_hang, ten: l.ten, dvt: l.dvt,
+                    ma_hang: l.ma_hang, ten: l.ten, dvt: l.dvt, ratio: num(l.ratio) || 1,
                     sl: num(l.sl), don_gia: num(l.don_gia), ck: num(l.ck),
                     thue_pct: l.thue_pct, so_lo: l.so_lo, exp: l.exp, ghi_chu: l.ghi_chu
                 };
