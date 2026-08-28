@@ -642,8 +642,10 @@
 
     function saveEdit() {
         if (typeof opts.onSaveLines !== 'function') { return; }
+        // Dòng MỚI mà chưa chọn mã hàng ⇒ dòng thừa, bỏ luôn (không gửi lên).
+        // Dòng cũ vẫn gửi (server tự xoá nếu bị làm trống).
         var payload = editLines
-            .filter(function (l) { return l._del || l.item_id > 0 || String(l.ma_hang || l.ten || '').trim() !== '' || num(l.sl) > 0; })
+            .filter(function (l) { return l._del || l.item_id > 0 || String(l.ma_hang || '').trim() !== ''; })
             .map(function (l) {
                 return {
                     item_id: l.item_id || 0, del: l._del ? 1 : 0,

@@ -2061,10 +2061,16 @@ class TGS_BCTK_Ajax
                     continue; // không phải dòng của phiếu này
                 }
 
-                if ($del && $id > 0) {
-                    // Kế toán cấp cao yêu cầu XOÁ VĨNH VIỄN dòng hàng
+                // Dòng TRỐNG (không có mã hàng): dòng cũ → xoá; dòng mới → bỏ qua.
+                $catalog_name0 = trim((string) ($lp[$sku]['name'] ?? $gp_tax[$sku]['name'] ?? ''));
+                $blank = ($sku === '' && $ten === '' && $catalog_name0 === '');
+
+                if (($del || $blank) && $id > 0) {
                     $wpdb->delete($LI, ['local_ledger_item_id' => $id], ['%d']);
                     continue;
+                }
+                if ($id === 0 && ($del || $blank || $sku === '' || $qty <= 0)) {
+                    continue; // dòng THÊM MỚI chưa đủ dữ liệu ⇒ bỏ, không tạo dòng thừa
                 }
 
                 $m = TGS_Money::from_pos($qty, $gia, $ck, $pct);
@@ -2105,7 +2111,8 @@ class TGS_BCTK_Ajax
 
                 if ($id > 0) {
                     $wpdb->update($LI, $data, ['local_ledger_item_id' => $id]);
-                } elseif (!$del && ($sku !== '' || $ten !== '' || $qty > 0)) {
+                } else {
+                    // Dòng mới đã qua các chốt ở trên (có mã hàng + SL > 0)
                     $wpdb->insert($LI, array_merge($data, [
                         'local_ledger_id' => $export_id,
                         'local_ledger_item_type' => 2,
