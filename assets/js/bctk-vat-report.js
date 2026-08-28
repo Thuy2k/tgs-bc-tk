@@ -228,8 +228,13 @@
                 );
             });
 
-            // Nút PDF: chỉ khi hóa đơn (gốc) đã gửi CQT thành công
-            var canPdf = String(r.vat_state) === 'done' && Number(r.sale_id) > 0;
+            /*
+             * Nút PDF: phiếu bán cần invoice_state = 'done'. Phiếu điều chỉnh
+             * luôn cho bấm (mở hóa đơn GỐC của đơn bán) — endpoint tự kiểm hóa
+             * đơn gốc đã gửi CQT chưa, chưa thì báo lại ở dòng thông báo.
+             */
+            var canPdf = Number(r.sale_id) > 0
+                && (isAdjust || String(r.vat_state) === 'done');
             $('#bctkVatPdfBtn').toggleClass('bctk-hidden', !canPdf).data('row', r);
             $('#bctkVatPdfMsg').text('');
             closePdf();
