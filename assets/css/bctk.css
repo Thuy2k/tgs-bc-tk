@@ -526,112 +526,148 @@
 .bctk-vat-st--wait { background: #fef3c7; color: #92400e; }
 .bctk-vat-st--none { background: #e2e8f0; color: #475569; }
 
-/* ── Modal ── */
-.bctk-vat-modal {
+/* ═══════════════════════════════════════════════════════════════════════════
+ * MODAL CHỨNG TỪ DÙNG CHUNG  (.pm-*)  — component bctk-phieu-modal.js
+ *
+ * Bố cục bám PHẦN MỀM CŨ: thanh hành động + chứng từ ở TRÊN, dòng hàng ở GIỮA
+ * (cuộn riêng), khách hàng / nhân viên / tổng cộng ở ĐÁY (3 cột). Modal CAO CỐ
+ * ĐỊNH full màn để bố cục không nhảy.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+.pm-modal {
     position: fixed;
     inset: 0;
     z-index: 100000;
     display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
 }
-.bctk-vat-modal__overlay { position: absolute; inset: 0; background: rgba(15, 23, 42, .55); }
-.bctk-vat-modal__panel {
+.pm-modal__overlay { position: absolute; inset: 0; background: rgba(15, 23, 42, .55); }
+/* Full màn — bám cửa sổ phần mềm cũ (thường mở maximize) */
+.pm-modal__panel {
     position: relative;
-    width: min(1040px, 96vw);
-    max-height: 92vh;
+    width: 100vw;
+    height: 100vh;
     display: flex;
     flex-direction: column;
     background: #fff;
-    border-radius: 12px;
     box-shadow: 0 24px 60px -12px rgba(0, 0, 0, .5);
     overflow: hidden;
 }
-.bctk-vat-modal__head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 12px 18px;
+
+/* ── Tiêu đề ── */
+.pm-modal__head {
+    flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 8px 14px;
     background: linear-gradient(135deg, #1e3a5f, #2563eb);
     color: #fff;
 }
-.bctk-vat-modal__head strong { font-size: 15px; }
-.bctk-vat-modal__sub { margin-left: 10px; font-size: 12px; opacity: .85; }
-.bctk-vat-modal__x {
-    border: 0;
-    background: transparent;
-    color: inherit;
-    font-size: 22px;
-    line-height: 1;
-    cursor: pointer;
-}
-.bctk-vat-modal__body { padding: 16px 18px; overflow: auto; }
-.bctk-vat-modal__grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 12px;
-    margin-bottom: 14px;
-}
-@media (max-width: 860px) { .bctk-vat-modal__grid { grid-template-columns: 1fr; } }
-.bctk-vat-card {
-    border: 1px solid #e2e8f0;
-    border-radius: 8px;
-    padding: 10px 12px;
-    background: #f8fafc;
-}
-.bctk-vat-card h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; color: #475569; letter-spacing: .3px; }
-.bctk-vat-card dl { display: grid; grid-template-columns: 110px 1fr; gap: 3px 8px; margin: 0; font-size: 12.5px; }
-.bctk-vat-card dt { color: #64748b; }
-.bctk-vat-card dd { margin: 0; color: #0f172a; word-break: break-word; }
+.pm-modal__title { display: flex; align-items: center; gap: 9px; min-width: 0; flex-wrap: wrap; }
+.pm-modal__title strong { font-size: 14px; }
+.pm-modal__code { font-family: ui-monospace, monospace; font-size: 12px; opacity: .9; }
+.pm-modal__x { border: 0; background: transparent; color: inherit; font-size: 22px; line-height: 1; cursor: pointer; }
+.pm-badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.pm-badge--ok   { background: #dcfce7; color: #166534; }
+.pm-badge--err  { background: #fee2e2; color: #b91c1c; }
+.pm-badge--wait { background: #fef3c7; color: #92400e; }
+.pm-badge--none { background: #e2e8f0; color: #475569; }
+.pm-tag { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px; }
+.pm-tag--z { background: #f3e8ff; color: #7e22ce; }
 
-.bctk-vat-modal__tablewrap { overflow: auto; border: 1px solid #e2e8f0; border-radius: 8px; max-height: 46vh; }
-.bctk-vat-items { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-.bctk-vat-items th,
-.bctk-vat-items td {
-    padding: 5px 8px;
+/* ── Thanh hành động ── */
+.pm-toolbar {
+    flex: 0 0 auto;
+    display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px;
+    padding: 7px 14px;
+    border-bottom: 1px solid #e2e8f0; background: #f1f5f9;
+}
+.pm-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.pm-actions .bctk-btn { white-space: nowrap; }
+.pm-actions__msg { flex: 1 1 160px; font-size: 12px; color: #475569; }
+.pm-actions__msg[data-type="error"] { color: #b91c1c; }
+.pm-toolbar__close { flex: 0 0 auto; margin-left: auto; }
+
+/* ── Chứng từ ── */
+.pm-doc { flex: 0 0 auto; padding: 8px 14px; border-bottom: 1px solid #e2e8f0; background: #fbfdff; }
+.pm-doc__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 3px 14px;
+}
+.pm-f { display: flex; gap: 6px; font-size: 12px; min-width: 0; }
+.pm-f__k { flex: 0 0 auto; color: #64748b; }
+.pm-f__v { flex: 1 1 auto; min-width: 0; color: #0f172a; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pm-doc__seller { margin-top: 6px; padding-top: 6px; border-top: 1px dashed #cbd5e1; display: flex; gap: 8px; align-items: baseline; }
+.pm-doc__seller-k { flex: 0 0 auto; font-size: 11px; font-weight: 700; color: #64748b; }
+.pm-doc__seller-v { flex: 1 1 auto; min-width: 0; font-size: 12px; color: #0f172a; }
+.pm-doc__seller-v i { color: #94a3b8; font-style: normal; }
+
+/* ── Dòng hàng (khối chính, cuộn riêng) ── */
+.pm-lines { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.pm-lines__table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.pm-lines__table th,
+.pm-lines__table td {
+    padding: 5px 9px;
     border-bottom: 1px solid #eef2f7;
     border-right: 1px solid #f2f5f9;
     text-align: left;
     white-space: nowrap;
 }
-.bctk-vat-items td:nth-child(3) { white-space: normal; min-width: 200px; }
-.bctk-vat-items td:last-child { white-space: normal; min-width: 140px; }
-.bctk-vat-items thead th { background: #f1f5f9; font-weight: 600; position: sticky; top: 0; }
-.bctk-vat-items .c-num { text-align: right; font-variant-numeric: tabular-nums; }
-.bctk-vat-items tfoot td { font-weight: 700; background: #f8fafc; border-top: 2px solid #cbd5e1; }
-.bctk-vat-items__sku { font-size: 11px; color: #94a3b8; }
-.bctk-vat-items__gift { background: #f0fdf4; }
-.bctk-vat-items__words { font-style: italic; color: #1e40af; text-align: right; }
+.pm-lines__table td:nth-child(3) { white-space: normal; min-width: 220px; }
+.pm-lines__table td:last-child  { white-space: normal; min-width: 150px; color: #475569; }
+.pm-lines__table thead th {
+    position: sticky; top: 0; z-index: 1;
+    background: #eef2f8; font-weight: 700; font-size: 11.5px; color: #334155;
+}
+.pm-lines__table .c-num { text-align: right; font-variant-numeric: tabular-nums; }
+.pm-lines__table tfoot td {
+    position: sticky; bottom: 0;
+    font-weight: 700; background: #f8fafc; border-top: 2px solid #cbd5e1;
+}
+.pm-lines__gift { background: #f0fdf4; }
+.pm-lines__empty { text-align: center; color: #94a3b8; padding: 20px; }
 
-.bctk-vat-modal__note { margin: 10px 0 0; font-size: 12px; color: #b45309; }
-.bctk-vat-modal__foot {
-    display: flex;
-    align-items: center;
+.pm-note { flex: 0 0 auto; margin: 0; padding: 6px 14px; font-size: 12px; color: #b45309; background: #fffbeb; }
+
+/* ── Đáy 3 cột ── */
+.pm-foot3 {
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: 1.3fr 1fr 1fr;
     gap: 10px;
-    padding: 10px 18px;
-    border-top: 1px solid #e2e8f0;
-    background: #f8fafc;
+    padding: 10px 14px;
+    border-top: 2px solid #cbd5e1; background: #f8fafc;
+    max-height: 34vh; overflow: auto;
 }
-.bctk-vat-modal__foot .bctk-btn:last-child { margin-left: auto; }
-.bctk-vat-modal__pdfmsg { font-size: 12px; color: #b91c1c; }
+@media (max-width: 1000px) { .pm-foot3 { grid-template-columns: 1fr; } }
+.pm-foot3__box { border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 10px; background: #fff; }
+.pm-foot3__box h4 { margin: 0 0 5px; font-size: 11px; text-transform: uppercase; letter-spacing: .3px; color: #475569; }
+.pm-foot3__box dl { display: grid; grid-template-columns: 108px 1fr; gap: 2px 8px; margin: 0; font-size: 12px; }
+.pm-foot3__box dl .pm-f { display: contents; }
+.pm-foot3__box dl .pm-f__k { color: #64748b; }
+.pm-foot3__box dl .pm-f__v { white-space: normal; color: #0f172a; font-weight: 600; }
+.pm-foot3__note { margin-top: 6px; }
+.pm-foot3__note .pm-f__k { display: block; font-size: 11px; color: #64748b; margin-bottom: 2px; }
+.pm-foot3__notebox { font-size: 12px; color: #0f172a; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 5px 8px; white-space: pre-wrap; }
 
-.bctk-vat-modal__pdf {
-    position: absolute;
-    inset: 0;
-    background: #fff;
-    display: flex;
-    flex-direction: column;
+.pm-foot3__total .pm-total__row {
+    display: flex; justify-content: space-between; gap: 10px;
+    font-size: 12.5px; padding: 2px 0;
 }
-.bctk-vat-modal__pdfhead {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 14px;
-    background: #1e293b;
-    color: #fff;
-    font-size: 12.5px;
+.pm-foot3__total .pm-total__row span { color: #64748b; }
+.pm-foot3__total .pm-total__row b { font-variant-numeric: tabular-nums; }
+.pm-foot3__total .pm-total__row--grand {
+    margin-top: 4px; padding-top: 6px; border-top: 1px solid #cbd5e1;
+    font-size: 15px;
 }
-.bctk-vat-modal__pdf iframe { flex: 1 1 auto; width: 100%; border: 0; }
+.pm-foot3__total .pm-total__row--grand b { color: #1e40af; }
+.pm-foot3__total .pm-total__words { margin-top: 4px; font-size: 11.5px; font-style: italic; color: #1e40af; text-align: right; }
+
+/* ── PDF phủ lên trong modal ──
+ * z-index cao hơn thead/tfoot sticky của bảng dòng hàng (z-index:1) — nếu
+ * không, tiêu đề bảng "xuyên" qua lớp PDF. */
+.pm-pdf { position: absolute; inset: 0; z-index: 20; background: #fff; display: flex; flex-direction: column; }
+.pm-pdf__head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 14px; background: #1e293b; color: #fff; font-size: 12.5px;
+}
+.pm-pdf iframe { flex: 1 1 auto; width: 100%; border: 0; }
 .bctk-modal-table td.c-note input { width: 100%; }

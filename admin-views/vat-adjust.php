@@ -87,7 +87,7 @@ $bctk_vat_cols = [
     </section>
 </div>
 
-<?php include __DIR__ . '/partials/vat-detail-modal.php'; ?>
+<?php /* Modal chi tiết dựng bằng JS: assets/js/bctk-phieu-modal.js (component dùng chung) */ ?>
 
 <script>
     window.TGS_BCTK = {

@@ -1712,6 +1712,8 @@ class TGS_BCTK_Report
                         COALESCE(NULLIF(i.local_ledger_item_unit_name, ''), pn.local_product_unit, '') AS dvt,
                         COALESCE(NULLIF(i.local_ledger_item_unit_ratio, 0), 1) AS ratio,
                         COALESCE(i.local_ledger_item_unit_quantity, 0)   AS sl_dvt,
+                        COALESCE(i.lot_code, '')                         AS lot_code,
+                        i.exp_date                                      AS exp_date,
                         COALESCE(i.local_ledger_item_note, '')           AS li_note
                    FROM {$item_table} i
                    LEFT JOIN {$pname_table} pn ON pn.local_product_name_id = i.local_product_name_id
@@ -1912,6 +1914,8 @@ class TGS_BCTK_Report
                         COALESCE(NULLIF(i.local_ledger_item_unit_name, ''), pn.local_product_unit, '') AS dvt,
                         COALESCE(NULLIF(i.local_ledger_item_unit_ratio, 0), 1) AS ratio,
                         COALESCE(i.local_ledger_item_unit_quantity, 0)   AS sl_dvt,
+                        COALESCE(i.lot_code, '')                         AS lot_code,
+                        i.exp_date                                      AS exp_date,
                         COALESCE(i.local_ledger_item_note, '')           AS li_note
                    FROM {$item_table} i
                    LEFT JOIN {$pname_table} pn ON pn.local_product_name_id = i.local_product_name_id

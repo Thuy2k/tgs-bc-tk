@@ -1375,6 +1375,8 @@ class TGS_BCTK_Ajax
                 'kho'            => $ma_shop,
                 'dvt'            => (string) ($it['dvt'] ?? ''),
                 'sl'             => $s((float) ($it['qty'] ?? 0)),
+                // SL theo ĐVT bán (lốc/vỉ/thùng) — cột "SL t" của phần mềm cũ
+                'sl_dvt'         => $s((float) ($it['sl_dvt'] ?? 0)) ?: $s((float) ($it['qty'] ?? 0) / max(1, (float) ($it['ratio'] ?? 1))),
                 // Đơn giá: bán → giá POS (trước CK, sau thuế); vẫn kèm giá gửi thuế
                 'don_gia'        => $mo['don_gia_sau_thue'],
                 'don_gia_gui_thue' => $mo['don_gia_gui_thue'],
@@ -1384,6 +1386,8 @@ class TGS_BCTK_Ajax
                     : ($mo['tax_pct_raw'] === null ? 'Chưa khai' : ($mo['tax_pct'] + 0)),
                 'tien_thue'      => $s($mo['thue']),
                 'thanh_tien'     => $s($mo['thanh_tien']),
+                'so_lo'          => (string) ($it['lot_code'] ?? ''),
+                'exp'            => self::clean_datetime($it['exp_date'] ?? ''),
                 'ghi_chu'        => (string) ($it['li_note'] ?? ''),
                 'is_gift'        => (int) ($it['gift_type'] ?? 0) === 1,
                 // id dòng — để base sửa/xoá dòng sau này bám vào
@@ -1497,6 +1501,13 @@ class TGS_BCTK_Ajax
             'vat_state'  => $vat_state,
             'invoice_no' => $so_hd,
             'queue_status' => (string) ($r['queue_status'] ?? ''),
+            /*
+             * Màn "DS Gửi Thuế" của chính shop — nơi luồng gửi lại / tách bill /
+             * chuyển bill / sửa phiếu chạy ĐÚNG NATIVE (hằng số bảng của tgs_pos
+             * bám theo site, không gọi chéo site được — xem vat_pdf()). Kế toán
+             * bấm hành động "chưa phát hành" là mở tab này.
+             */
+            'pos_tax_url' => get_home_url((int) $r['_blog_id'], '/pos-viettel-tax/'),
             'items'      => $items,
         ];
     }

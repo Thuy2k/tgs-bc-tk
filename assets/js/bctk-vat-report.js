@@ -1,12 +1,14 @@
 /**
  * BC_TK — Báo cáo VAT: Phiếu xuất bán (VAT) & Phiếu điều chỉnh giảm (VAT).
  *
- * Dùng lại toàn bộ bộ máy của bctk-filter.js (chạy theo batch từng site, thanh
- * tiến độ, xin lại nonce). Trang này chỉ khai:
- *   - cách vẽ 32 cột  (rowHtml + cellText)
- *   - cách cộng dòng tổng (4 cột tiền)
- *   - bấm dòng → mở modal xem chi tiết + PDF hoá đơn
+ * Dùng lại bộ máy của bctk-filter.js (chạy batch từng site, tiến độ, xin nonce).
+ * File này chỉ khai:
+ *   - cách vẽ 32 cột (rowHtml + cellText) + cộng 4 cột tiền
  *   - hai <select> lọc riêng (loại phiếu / thông tin VAT) → đổi là chạy lại
+ *   - bấm dòng → mở TGSBctkPhieuModal, đăng ký các hành động cho kế toán
+ *
+ * Modal + các khối bên trong nằm ở component riêng bctk-phieu-modal.js — file
+ * này chỉ TRUYỀN payload + danh sách hành động vào.
  *
  * Xem docs/bao-cao-vat-phieu-xuat-ban-va-dieu-chinh.md.
  */
@@ -14,14 +16,14 @@
     'use strict';
 
     var CFG = window.tgsBctkVatReport || {};
+    var ERR_STATES = ['issue_error', 'cqt_error', 'validate_error', 'error'];
 
     function ngay(s, withTime) {
         var m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/.exec(String(s || ''));
-        if (!m) { return ''; }
+        if (!m || m[1] === '0000') { return ''; }
         var d = m[3] + '/' + m[2] + '/' + m[1];
         return (withTime && m[4]) ? (d + ' ' + m[4] + ':' + m[5]) : d;
     }
-
     function rateText(v) {
         if (v === null || v === undefined || v === '') { return ''; }
         if (v === 'KCT' || v === 'Chưa khai') { return v; }
@@ -39,15 +41,12 @@
         var fmt = B.fmt;
         var isAdjust = CFG.kind === 'adjust';
 
-        // ── Đổi bộ lọc riêng → chạy lại (dữ liệu cũ không còn đúng) ────────────
+        // ── Đổi bộ lọc riêng → chạy lại ─────────────────────────────────────
         $('#bctkVatBillScope, #bctkVatInfoFilter').on('change', function () {
             if ($('.bctk-site:checked').length) { $(document).trigger('bctk:search'); }
         });
 
-        /*
-         * Chữ của từng cột — PHẢI khớp thứ tự <thead> (32 cột). Base dùng hàm
-         * này cho cả lọc theo cột lẫn xuất Excel.
-         */
+        // ── Vẽ bảng 32 cột ─────────────────────────────────────────────────
         function cellText(r, c) {
             switch (c) {
                 case 0:  return r.ma_shop || '';
@@ -89,7 +88,7 @@
         function stateClass(r) {
             var s = String(r.vat_state || '');
             if (s === 'done' || s === 'issued') { return 'bctk-vat-st--ok'; }
-            if (['issue_error', 'cqt_error', 'validate_error', 'error'].indexOf(s) !== -1) { return 'bctk-vat-st--err'; }
+            if (ERR_STATES.indexOf(s) !== -1) { return 'bctk-vat-st--err'; }
             if (['pending', 'processing', 'blocked'].indexOf(s) !== -1) { return 'bctk-vat-st--wait'; }
             return 'bctk-vat-st--none';
         }
@@ -100,34 +99,22 @@
         function rowHtml(r, i) {
             return '<tr data-i="' + i + '" class="bctk-vat-row' + (r.is_z ? ' bctk-vat-row--z' : '') + '"'
                 + ' title="Bấm để xem chi tiết chứng từ">'
-                + td(r.ma_shop, 'c-sku')
-                + td(r.seri, 'c-sku')
-                + td(r.mau_hd, 'c-sku')
-                + td(r.httt, 'c-sku')
-                + td(r.ma_kh, 'c-sku')
-                + td(r.so_hd, 'c-sku')
+                + td(r.ma_shop, 'c-sku') + td(r.seri, 'c-sku') + td(r.mau_hd, 'c-sku')
+                + td(r.httt, 'c-sku') + td(r.ma_kh, 'c-sku') + td(r.so_hd, 'c-sku')
                 + '<td class="c-name" title="' + esc(r.ghi_chu) + '">' + esc(r.ghi_chu) + '</td>'
-                + tdNum(r.tt_chua_thue)
-                + td(ngay(r.ngay_hd, true), 'c-sku')
-                + tdNum(r.tong_thue)
-                + tdNum(r.thanh_tien)
+                + tdNum(r.tt_chua_thue) + td(ngay(r.ngay_hd, true), 'c-sku')
+                + tdNum(r.tong_thue) + tdNum(r.thanh_tien)
                 + '<td class="c-name">' + esc(r.thanh_tien_chu) + '</td>'
-                + tdNum(r.tong_ck)
-                + td(rateText(r.ty_le_thue), 'c-num')
+                + tdNum(r.tong_ck) + td(rateText(r.ty_le_thue), 'c-num')
                 + '<td class="c-name" title="' + esc(r.ten_cty_mua) + '">' + esc(r.ten_cty_mua) + '</td>'
                 + td(r.ten_kh, 'c-name')
                 + '<td class="c-name" title="' + esc(r.dchi_mua) + '">' + esc(r.dchi_mua) + '</td>'
-                + td(r.email_mua, 'c-sku')
-                + td(r.dt_mua, 'c-sku')
-                + td(r.mst_mua, 'c-sku')
+                + td(r.email_mua, 'c-sku') + td(r.dt_mua, 'c-sku') + td(r.mst_mua, 'c-sku')
                 + '<td class="c-name" title="' + esc(r.dchi_ban) + '">' + esc(r.dchi_ban) + '</td>'
                 + '<td class="c-name" title="' + esc(r.ten_cty_ban) + '">' + esc(r.ten_cty_ban) + '</td>'
-                + td(r.dt_ban, 'c-sku')
-                + td(r.mst_ban, 'c-sku')
-                + td(ngay(r.ngay_xuat, true), 'c-sku')
-                + td(r.so_phieu_xuat, 'c-sku')
-                + td(r.nv_ten, 'c-name')
-                + td(r.ly_do, 'c-sku')
+                + td(r.dt_ban, 'c-sku') + td(r.mst_ban, 'c-sku')
+                + td(ngay(r.ngay_xuat, true), 'c-sku') + td(r.so_phieu_xuat, 'c-sku')
+                + td(r.nv_ten, 'c-name') + td(r.ly_do, 'c-sku')
                 + '<td class="c-sku"><span class="bctk-vat-st ' + stateClass(r) + '">' + esc(r.trang_thai_vat) + '</span></td>'
                 + td(r.so_so, 'c-sku')
                 + '<td class="c-num">' + fmt(r.sl_ban_ghi) + '</td>'
@@ -135,7 +122,6 @@
                 + '</tr>';
         }
 
-        // ── Dòng tổng ────────────────────────────────────────────────────────
         var viewRows = [];
 
         function footer(rows) {
@@ -155,13 +141,9 @@
         B.setRenderer(function (rows) {
             viewRows = rows;
             var ds = window.TGSDesignSystem;
-
             if (ds && ds.virtualBody) {
                 ds.virtualBody({
-                    table: table,
-                    rows: rows,
-                    rowHtml: rowHtml,
-                    cellText: cellText,
+                    table: table, rows: rows, rowHtml: rowHtml, cellText: cellText,
                     onFilter: function (kept) { viewRows = kept; footer(kept); }
                 });
             } else {
@@ -170,111 +152,43 @@
                 $('#bctkBody').html(buf.join(''));
             }
             footer(rows);
-        }, function () {
-            footer(viewRows);
-        });
+        }, function () { footer(viewRows); });
 
-        // ── Modal chi tiết ───────────────────────────────────────────────────
-        var $modal = $('#bctkVatModal');
+        // ── Hành động cho kế toán ──────────────────────────────────────────
+        //
+        // Điều kiện hiện nút bám theo bill-z-va-hang-tang.md + yêu cầu:
+        //   chưa phát hành  → sửa phiếu, tách bill Z, gửi hoá đơn
+        //   đang lỗi        → gửi lại
+        //   đã phát hành    → điều chỉnh / thay thế
+        //   bill Z (nội bộ) → sửa thoải mái
+        //
+        // ⚠️ Luồng gửi lại / tách bill / chuyển bill / sửa phiếu của tgs_pos →
+        // tgs-viettel-invoice bám HẰNG SỐ BẢNG theo site (TGS_TABLE_*), không
+        // chạy chéo site từ màn tổng được (xem TGS_BCTK_Ajax::vat_pdf). Nên các
+        // hành động "chưa phát hành" MỞ ĐÚNG màn "DS Gửi Thuế" của shop đó —
+        // nơi luồng chạy y hệt, native. "Xem PDF" thì bc-tk tự lấy được.
+        var issued = function (r) { return String(r.vat_state) === 'done'; };
+        var errored = function (r) { return ERR_STATES.indexOf(String(r.vat_state)) !== -1; };
+        var notIssued = function (r) { return !issued(r) && !isAdjust; };
 
-        function set(field, val) {
-            $modal.find('[data-vat-field="' + field + '"]').text(val == null ? '' : val);
+        function openPosTax(r, api) {
+            if (!r.pos_tax_url) {
+                api.toast('error', 'Không có đường dẫn màn Gửi Thuế của shop này.');
+                return;
+            }
+            window.open(r.pos_tax_url, '_blank', 'noopener');
+            api.toast('info', 'Đã mở màn "DS Gửi Thuế" của shop ở tab mới — thao tác ở đó rồi bấm "Tìm kiếm" lại để cập nhật.');
         }
 
-        function openModal(r) {
-            set('ma_phieu', r.so_phieu_xuat || '');
-            set('ban_ten', r.ten_cty_ban);
-            set('ban_mst', r.mst_ban);
-            set('ban_dchi', r.dchi_ban);
-            set('ban_dt', r.dt_ban);
-            set('mua_ten', r.ten_kh);
-            set('mua_cty', r.ten_cty_mua);
-            set('mua_mst', r.mst_mua);
-            set('mua_dchi', r.dchi_mua);
-            set('mua_dt', r.dt_mua);
-            set('mua_email', r.email_mua);
-            set('so_phieu_xuat', r.so_phieu_xuat);
-            set('so_hd', r.so_hd || '—');
-            set('seri', r.seri || '—');
-            set('mau_hd', r.mau_hd || '—');
-            set('ngay_xuat', ngay(r.ngay_xuat, true));
-            set('ngay_hd', ngay(r.ngay_hd, true) || '—');
-            set('httt', r.httt);
-            set('ly_do', r.ly_do);
-            set('trang_thai_vat', r.trang_thai_vat);
-            set('sum_ck', fmt(r.tong_ck));
-            set('sum_chua_thue', fmt(r.tt_chua_thue));
-            set('sum_thue', fmt(r.tong_thue));
-            set('sum_thanh_tien', fmt(r.thanh_tien));
-            set('thanh_tien_chu', r.thanh_tien_chu);
-            set('note', isAdjust
-                ? 'Phiếu điều chỉnh giảm — các số tiền mang dấu âm (phần khai giảm so với hóa đơn gốc). Nút "Xem PDF hóa đơn" mở hóa đơn GỐC của đơn bán để đối chiếu.'
-                : '');
-
-            var body = $('#bctkVatItemsBody').empty();
-            (r.items || []).forEach(function (it) {
-                body.append(
-                    '<tr' + (it.is_gift ? ' class="bctk-vat-items__gift"' : '') + '>'
-                    + '<td>' + it.stt + '</td>'
-                    + '<td>' + esc(it.ma_hang || '') + '</td>'
-                    + '<td>' + esc(it.ten) + (it.is_gift ? ' <em>(KM)</em>' : '') + '</td>'
-                    + '<td>' + esc(it.kho || '') + '</td>'
-                    + '<td>' + esc(it.dvt) + '</td>'
-                    + '<td class="c-num">' + fmt(it.sl) + '</td>'
-                    + '<td class="c-num">' + fmt(it.don_gia) + '</td>'
-                    + '<td class="c-num">' + fmt(it.ck) + '</td>'
-                    + '<td class="c-num">' + fmt(it.tien_chua_thue) + '</td>'
-                    + '<td class="c-num">' + esc(rateText(it.thue_suat)) + '</td>'
-                    + '<td class="c-num">' + fmt(it.tien_thue) + '</td>'
-                    + '<td class="c-num">' + fmt(it.thanh_tien) + '</td>'
-                    + '<td>' + esc(it.ghi_chu || '') + '</td>'
-                    + '</tr>'
-                );
-            });
-
-            /*
-             * Nút PDF: phiếu bán cần invoice_state = 'done'. Phiếu điều chỉnh
-             * luôn cho bấm (mở hóa đơn GỐC của đơn bán) — endpoint tự kiểm hóa
-             * đơn gốc đã gửi CQT chưa, chưa thì báo lại ở dòng thông báo.
-             */
-            var canPdf = Number(r.sale_id) > 0
-                && (isAdjust || String(r.vat_state) === 'done');
-            $('#bctkVatPdfBtn').toggleClass('bctk-hidden', !canPdf).data('row', r);
-            $('#bctkVatPdfMsg').text('');
-            closePdf();
-
-            $modal.removeClass('bctk-hidden').attr('aria-hidden', 'false');
+        function soon(name) {
+            return function (r, api) {
+                api.toast('info', name + ' — đang phát triển, sẽ chốt luồng ở bước sau.');
+            };
         }
 
-        function closeModal() {
-            $modal.addClass('bctk-hidden').attr('aria-hidden', 'true');
-            closePdf();
-        }
-
-        function closePdf() {
-            $('#bctkVatPdfWrap').addClass('bctk-hidden');
-            document.getElementById('bctkVatPdfFrame').src = 'about:blank';
-        }
-
-        $(document).on('click', '#bctkBody tr[data-i]', function () {
-            var r = viewRows[parseInt(this.getAttribute('data-i'), 10)];
-            if (r) { openModal(r); }
-        });
-
-        $modal.on('click', '[data-vat-close]', closeModal);
-        $('#bctkVatPdfClose').on('click', closePdf);
-        $(document).on('keydown', function (e) {
-            if (e.key === 'Escape' && !$modal.hasClass('bctk-hidden')) { closeModal(); }
-        });
-
-        // ── Xem PDF hóa đơn (dùng endpoint sẵn có của tgs-viettel-invoice) ────
-        $('#bctkVatPdfBtn').on('click', function () {
-            var r = $(this).data('row');
-            if (!r) { return; }
-
-            var $msg = $('#bctkVatPdfMsg').text('Đang lấy PDF từ Viettel…');
-            $(this).prop('disabled', true);
-
+        function fetchPdf(r, api) {
+            api.busy(true);
+            api.toast('info', 'Đang lấy PDF từ Viettel…');
             var fd = new FormData();
             fd.append('action', 'tgs_bctk_vat_pdf');
             fd.append('nonce', (window.TGS_BCTK && window.TGS_BCTK.nonce) || '');
@@ -287,19 +201,61 @@
                     if (!out || !out.success || !(out.data && out.data.file_bytes_base64)) {
                         throw new Error((out && out.data && out.data.message) || 'Không lấy được PDF.');
                     }
-                    var d = out.data;
-                    $('#bctkVatPdfName').text(d.file_name || 'invoice.pdf');
-                    document.getElementById('bctkVatPdfFrame').src =
-                        'data:application/pdf;base64,' + d.file_bytes_base64;
-                    $('#bctkVatPdfWrap').removeClass('bctk-hidden');
-                    $msg.text('');
+                    api.pdf(out.data.file_bytes_base64, out.data.file_name);
+                    api.toast('', '');
                 })
-                .catch(function (err) {
-                    $msg.text(err.message || 'Không lấy được PDF hóa đơn.');
-                })
-                .then(function () {
-                    $('#bctkVatPdfBtn').prop('disabled', false);
-                });
+                .catch(function (err) { api.toast('error', err.message || 'Không lấy được PDF hoá đơn.'); })
+                .then(function () { api.busy(false); });
+        }
+
+        var ACTIONS = [
+            {
+                id: 'pdf', label: 'Xem PDF', cls: 'primary',
+                when: function (r) { return Number(r.sale_id) > 0 && (isAdjust || issued(r)); },
+                run: fetchPdf
+            },
+            {
+                id: 'edit', label: 'Sửa phiếu ↗',
+                when: function (r) { return r.is_z || notIssued(r); },
+                run: openPosTax
+            },
+            {
+                id: 'split', label: 'Tách / chuyển bill Z ↗',
+                when: function (r) { return notIssued(r) && !r.is_z; },
+                run: openPosTax
+            },
+            {
+                id: 'issue', label: 'Gửi hoá đơn thuế ↗',
+                when: function (r) { return notIssued(r) && !r.is_z; },
+                run: openPosTax
+            },
+            {
+                id: 'resend', label: 'Gửi lại ↗',
+                when: function (r) { return errored(r); },
+                run: openPosTax
+            },
+            {
+                id: 'adjust', label: 'Điều chỉnh',
+                when: function (r) { return !isAdjust && issued(r); },
+                run: soon('Điều chỉnh hoá đơn')
+            },
+            {
+                id: 'replace', label: 'Thay thế',
+                when: function (r) { return !isAdjust && issued(r); },
+                run: soon('Thay thế hoá đơn')
+            }
+        ];
+
+        $(document).on('click', '#bctkBody tr[data-i]', function () {
+            var r = viewRows[parseInt(this.getAttribute('data-i'), 10)];
+            if (!r || !window.TGSBctkPhieuModal) { return; }
+            window.TGSBctkPhieuModal.open(r, {
+                title: isAdjust ? 'Chi tiết phiếu điều chỉnh giảm (VAT)' : 'Chi tiết phiếu xuất bán (VAT)',
+                note: isAdjust
+                    ? 'Phiếu điều chỉnh giảm — số tiền mang dấu âm (phần khai giảm so với hoá đơn gốc). "Xem PDF hoá đơn" mở hoá đơn GỐC để đối chiếu.'
+                    : '',
+                actions: ACTIONS
+            });
         });
     });
 })(jQuery);

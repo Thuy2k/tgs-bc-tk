@@ -227,18 +227,30 @@ class TGS_BCTK_Plugin
          * blog nên tạo ở đây là dùng được cho mọi shop.
          */
         if ($view === self::VIEW_VAT_SALES || $view === self::VIEW_VAT_ADJUST) {
+            /*
+             * Component modal chứng từ — file độc lập, dùng chung được cho mọi
+             * màn BC_TK. Nạp TRƯỚC bctk-vat-report.js (report chỉ truyền payload
+             * + danh sách hành động vào window.TGSBctkPhieuModal).
+             */
+            wp_enqueue_script(
+                'tgs-bctk-phieu-modal',
+                TGS_BCTK_URL . 'assets/js/bctk-phieu-modal.js',
+                ['jquery'],
+                TGS_BCTK_VERSION . '.' . @filemtime(TGS_BCTK_DIR . 'assets/js/bctk-phieu-modal.js'),
+                true
+            );
+
             wp_enqueue_script(
                 'tgs-bctk-vat-report',
                 TGS_BCTK_URL . 'assets/js/bctk-vat-report.js',
-                ['jquery', 'tgs-bctk-filter'],
+                ['jquery', 'tgs-bctk-filter', 'tgs-bctk-phieu-modal'],
                 TGS_BCTK_VERSION . '.' . @filemtime(TGS_BCTK_DIR . 'assets/js/bctk-vat-report.js'),
                 true
             );
 
             wp_localize_script('tgs-bctk-vat-report', 'tgsBctkVatReport', [
-                'ajaxUrl'    => admin_url('admin-ajax.php'),
-                'posPdfNonce' => wp_create_nonce('tmd_pos_nonce'),
-                'kind'       => $view === self::VIEW_VAT_ADJUST ? 'adjust' : 'sales',
+                'ajaxUrl' => admin_url('admin-ajax.php'),
+                'kind'    => $view === self::VIEW_VAT_ADJUST ? 'adjust' : 'sales',
             ]);
         }
 

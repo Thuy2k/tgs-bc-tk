@@ -98,15 +98,30 @@ của phiếu hoàn (type 3), cùng cách `build_payload()` của return-adjustm
 
 ## 4. Modal xem chi tiết + PDF
 
-Bấm một dòng → modal (`partials/vat-detail-modal.php`):
+Bấm một dòng → **component modal dùng chung** `assets/js/bctk-phieu-modal.js`
+(`window.TGSBctkPhieuModal.open(payload, {title, note, actions})`). Component tự
+dựng DOM một lần, chia khối: `renderToolbar` · `renderDoc` · `renderLines` ·
+`renderFoot` — sửa khối nào không đụng khối khác. Màn báo cáo chỉ TRUYỀN
+`payload` (dòng đã dựng ở server) + mảng `actions` vào.
 
-- 3 khối: **Đơn vị bán hàng** · **Người mua** · **Chứng từ**.
-- Bảng dòng hàng bố cục **phần mềm cũ** (kế toán quen mắt, và để tận dụng làm
-  base sửa phiếu): STT · **Mã hàng** · Tên hàng · **Kho** (= mã shop) · ĐVT · SL
-  · Đơn giá (giá POS, trước CK sau thuế) · **CK** · Thành tiền chưa thuế · Thuế
-  suất · Tiền thuế · Thành tiền · **Ghi chú**. Mỗi dòng kèm `item_id` để base
-  sửa/xoá dòng bám vào. Tên hàng trống trên phiếu thì bồi từ catalog global
-  (`TGS_BCTK_Report::product_info()`).
+**Bố cục bám PHẦN MỀM CŨ** (kế toán chạy song song hai phần mềm, tránh ngợp) —
+modal **cao cố định 94vh**, không co giãn theo nội dung để bố cục không nhảy:
+
+| Vùng | Nội dung |
+|---|---|
+| Tiêu đề | mã phiếu · badge trạng thái VAT · nhãn BILL Z |
+| **Thanh hành động** (trên) | các nút sự kiện theo trạng thái (§6) + Đóng |
+| **Chứng từ** (trên) | Lý do · Kho/Mã shop · Số phiếu xuất · Ngày xuất · Số HĐ · Seri · Mẫu HĐ · Ngày HĐ · Hình thức TT · Trạng thái VAT · Tỷ lệ thuế · Số SO · SL bản ghi — kèm dòng **ĐƠN VỊ BÁN HÀNG** (tên · MST · địa chỉ · ĐT) |
+| **Dòng hàng** (giữa, cuộn riêng) | STT · Mã hàng · Tên hàng · Kho · ĐVT · SL · SL ĐVT · Đơn giá · CK · TT chưa thuế · Thuế suất · Tiền thuế · Thành tiền · Số lô · EXP · Ghi chú — tfoot: tổng từng cột |
+| **Đáy 3 cột** | ① Thông tin khách hàng (Mã KH/SĐT · Tên khách · Tên công ty · MST · Địa chỉ · ĐT · Email) ② Nhân viên xuất + userID + Ghi chú phiếu ③ Tổng cộng: Tiền hàng · Thuế · Chiết khấu · **Tổng thanh toán** + bằng chữ |
+
+Mỗi dòng hàng kèm `item_id` để base sửa/xoá bám vào. Tên hàng trống thì bồi từ
+catalog global (`TGS_BCTK_Report::product_info()`). Số lô / EXP lấy thêm từ
+`local_ledger_item.lot_code` / `exp_date`.
+
+Bảng dòng hàng gắn `data-ds-no-grid / -export / -colcfg / -filter` để Design
+System KHÔNG nhét thanh "Chọn cột / Xuất Excel / dòng lọc cột" vào. **VẪN cho
+kéo giãn cột**.
 - Nút **Xem PDF hóa đơn** — hiện khi `invoice_state = 'done'`. Gọi AJAX RIÊNG của
   bc-tk `tgs_bctk_vat_pdf` (`TGS_BCTK_Ajax::vat_pdf()`): `switch_to_blog` →
   đọc `{prefix}local_viettel_invoice` theo prefix thật → cấu hình Viettel từ
@@ -130,30 +145,48 @@ không gọi thêm AJAX.
 | Giao diện bảng + config `window.TGS_BCTK` | `admin-views/vat-sales.php`, `admin-views/vat-adjust.php` |
 | Thanh lọc riêng (loại phiếu / thông tin VAT) | `admin-views/partials/vat-report-filters.php` |
 | Modal chi tiết | `admin-views/partials/vat-detail-modal.php` |
-| Renderer 32 cột + modal + PDF | `assets/js/bctk-vat-report.js` |
+| Renderer 32 cột + đăng ký hành động | `assets/js/bctk-vat-report.js` |
+| Component modal chứng từ (dùng chung) | `assets/js/bctk-phieu-modal.js` — `window.TGSBctkPhieuModal` |
 | Nạp asset + nonce PDF | `tgs-bc-tk.php` → `enqueue_assets()` |
 | Batch từng site, tiến độ, nonce | `assets/js/bctk-filter.js` (dùng lại, chỉ khai `setRenderer` + `extraParams`) |
 
 ---
 
-## 6. Bước tiếp theo — MODAL PHIẾU DÙNG CHUNG (chờ danh sách sự kiện)
+## 6. Hành động & giới hạn CHÉO SITE
 
-Modal hiện tại (chỉ đọc) là **bản mẫu** cho một component dùng chung TOÀN BỘ
-BC_TK — Sổ CSKH, Báo cáo bán hàng, Tổng hợp bán hàng, và menu Mua hàng (Tồn
-kho, Sổ kho theo mặt hàng, Phân tích mua hàng, Báo cáo mua hàng, Tổng hợp mua
-hàng). Ý tưởng: **truyền vào `loại` + `blog_id` + mã phiếu → mở modal xem, rồi
-thêm / sửa / xoá dòng khi cần**. Tiền luôn theo
-`tgs_shop_management/docs/mo-hinh-tien-va-bang-local-ledger-item.md`.
+### 6.1 Vì sao "chưa phát hành" phải mở màn của shop
 
-Nút sự kiện (bố trí gọn theo nhóm, chờ chốt chi tiết):
+Luồng **gửi lại thuế / tách bill / chuyển bill Z / sửa phiếu** nằm ở tgs_pos →
+tgs-viettel-invoice và bám **hằng số bảng theo site** (`TGS_TABLE_LOCAL_LEDGER`
+= `$wpdb->prefix . 'local_ledger'`, chốt ở `plugins_loaded`). Màn tổng chạy trên
+site tổng nên hằng số trỏ về bảng site tổng — gọi các endpoint đó cho shop khác
+là **tra nhầm bảng** (đúng lỗi PDF gặp lần đầu). `TGS_BCTK_Ajax::vat_pdf()` giải
+quyết riêng cho PDF bằng cách `switch_to_blog` rồi đọc `$wpdb->prefix` tươi.
 
-| Điều kiện phiếu | Sự kiện cho phép |
-|---|---|
-| Chưa gửi thuế / chưa phát hành | Sửa phiếu (thêm/sửa/xoá dòng), **tách bill Z** (đúng luồng nhân viên ở `tgs_pos/docs/bill-z-va-hang-tang.md`), gửi thuế |
-| Đã phát hành hoá đơn | **Điều chỉnh** / **thay thế** hoá đơn (không sửa trực tiếp) |
-| Phiếu nội bộ (bill Z) | Sửa thoải mái, không dính thuế |
-| Gửi lỗi | Gửi lại |
+Nên các nút "chưa phát hành" trong modal **mở tab màn "DS Gửi Thuế" của chính
+shop** (`get_home_url($blog_id, '/pos-viettel-tax/')` — kèm trong payload là
+`pos_tax_url`). Ở đó luồng chạy y hệt, native. Kế toán thao tác xong bấm "Tìm
+kiếm" lại để cập nhật báo cáo.
 
-Chưa làm: các sự kiện trên; endpoint PDF riêng cho hoá đơn điều chỉnh; luồng
-trạng thái cuối "được cơ quan thuế chấp nhận" (hiện gộp vào "Hóa đơn có chữ ký
-số").
+| Điều kiện phiếu | Nút | Hành vi hiện tại |
+|---|---|---|
+| Chưa phát hành / bill Z | **Sửa phiếu ↗** | mở màn DS Gửi Thuế của shop |
+| Chưa phát hành (không phải Z) | **Tách / chuyển bill Z ↗**, **Gửi hoá đơn thuế ↗** | mở màn DS Gửi Thuế của shop |
+| Gửi lỗi | **Gửi lại ↗** | mở màn DS Gửi Thuế của shop |
+| Đã phát hành | **Xem PDF**, **Điều chỉnh**, **Thay thế** | PDF chạy thật; điều chỉnh/thay thế chờ chốt luồng |
+
+### 6.2 Việc còn phải làm
+
+- **Làm luồng "chưa phát hành" chạy TRONG modal** thay vì mở tab — cần một
+  trong hai: (a) bc-tk proxy `switch_to_blog` + bản logic đọc bảng theo
+  `$wpdb->prefix` cho từng bước, hoặc (b) tgs_pos/tgs-viettel-invoice chuyển
+  hằng số bảng sang hàm động. Chờ chốt hướng.
+- **Điều chỉnh / thay thế hoá đơn** đã phát hành.
+- Endpoint PDF riêng cho hoá đơn điều chỉnh giảm.
+- Luồng trạng thái cuối "được cơ quan thuế chấp nhận".
+
+### 6.3 Modal là component dùng chung
+
+`bctk-phieu-modal.js` để dùng lại cho Sổ CSKH, Báo cáo/Tổng hợp bán hàng, menu
+Mua hàng... — mỗi màn chỉ truyền `payload` + mảng `actions` riêng. Tiền luôn
+theo `tgs_shop_management/docs/mo-hinh-tien-va-bang-local-ledger-item.md`.
