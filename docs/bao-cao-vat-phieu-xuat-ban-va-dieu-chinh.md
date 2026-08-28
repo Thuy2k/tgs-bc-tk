@@ -168,8 +168,11 @@ quyết riêng cho PDF bằng cách `switch_to_blog` rồi đọc `$wpdb->prefix
 
 Nên các nút "chưa phát hành" trong modal **mở tab màn "DS Gửi Thuế" của chính
 shop** (`get_home_url($blog_id, '/pos-viettel-tax/')` — kèm trong payload là
-`pos_tax_url`). Ở đó luồng chạy y hệt, native. Kế toán thao tác xong bấm "Tìm
-kiếm" lại để cập nhật báo cáo.
+`pos_tax_url`) **kèm deep-link `?open_code=<local_ledger_code>&open_date=<YYYY-MM-DD>`**.
+`pos-viettel-tax.js` (`init()` → `_openByDeepLinkCode()`) đọc 2 tham số → đặt
+khoảng ngày về đúng hôm đó, `fetchList()`, rồi tự `openRowQuickView()` chứng từ
+khớp `local_ledger_code` → bung sẵn chi tiết bill. Ở đó luồng chạy y hệt, native.
+Kế toán thao tác xong bấm "Tìm kiếm" lại để cập nhật báo cáo.
 
 | Điều kiện phiếu | Nút | Hành vi hiện tại |
 |---|---|---|

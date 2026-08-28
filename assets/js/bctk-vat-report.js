@@ -176,8 +176,13 @@
                 api.toast('error', 'Không có đường dẫn màn Gửi Thuế của shop này.');
                 return;
             }
-            window.open(r.pos_tax_url, '_blank', 'noopener');
-            api.toast('info', 'Đã mở màn "DS Gửi Thuế" của shop ở tab mới — thao tác ở đó rồi bấm "Tìm kiếm" lại để cập nhật.');
+            // Bung sẵn đúng bill trên màn "DS Gửi Thuế" (deep-link ?open_code=&open_date=).
+            var q = '?open_code=' + encodeURIComponent(r.so_phieu_xuat || '');
+            var ymd = /^(\d{4}-\d{2}-\d{2})/.exec(String(r.ngay_xuat || ''));
+            if (ymd) { q += '&open_date=' + encodeURIComponent(ymd[1]); }
+            window.open(r.pos_tax_url + q, '_blank', 'noopener');
+            api.toast('info', 'Đã mở màn "DS Gửi Thuế" của shop kèm bill ' + (r.so_phieu_xuat || '')
+                + ' ở tab mới — thao tác xong bấm "Tìm kiếm" lại để cập nhật.');
         }
 
         // "Hoàn hàng" / "Điều chỉnh" → mở màn "Lịch sử đơn hàng" của shop, bung
