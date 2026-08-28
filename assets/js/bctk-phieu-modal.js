@@ -147,8 +147,10 @@
         +       '<thead><tr>'
         +         '<th>STT</th><th>Mã hàng</th><th>Tên hàng</th><th>Kho</th><th>ĐVT</th>'
         +         '<th class="c-num">SL</th><th class="c-num">SL ĐVCB</th>'
-        +         '<th class="c-num">Đơn giá</th><th class="c-num">CK</th>'
-        +         '<th class="c-num">TT chưa thuế</th><th class="c-num">Thuế suất</th>'
+        +         '<th class="c-num" title="Đơn giá BÁN cho khách theo ĐVT — ĐÃ GỒM THUẾ, TRƯỚC chiết khấu (đúng như giá trên bill POS)">ĐG bán</th>'
+        +         '<th class="c-num" title="Chiết khấu tiền, CẢ DÒNG, tính trên giá đã gồm thuế">CK</th>'
+        +         '<th class="c-num" title="Tiền hàng sau chiết khấu, trước thuế">TT chưa thuế</th>'
+        +         '<th class="c-num" title="Chỉ để tham khảo — kế toán không sửa tay, tự lấy theo cấu hình mã hàng">Thuế suất</th>'
         +         '<th class="c-num">Tiền thuế</th><th class="c-num">Thành tiền</th>'
         +         '<th>Số lô</th><th>EXP</th><th>Ghi chú</th>'
         +       '</tr></thead>'
@@ -500,8 +502,9 @@
             + hRow('Tổng thanh toán', money(r.thanh_tien) + ' (' + (r.thanh_tien_chu || '') + ')')
             + '</tbody></table>';
 
-        var cols = ['STT', 'Mã hàng', 'Tên hàng', 'Kho', 'ĐVT', 'SL', 'SL ĐVCB', 'Đơn giá',
-            'CK', 'TT chưa thuế', 'Thuế suất', 'Tiền thuế', 'Thành tiền', 'Số lô', 'EXP', 'Ghi chú'];
+        var cols = ['STT', 'Mã hàng', 'Tên hàng', 'Kho', 'ĐVT', 'SL', 'SL ĐVCB',
+            'ĐG bán (gồm thuế, trước CK)', 'CK', 'TT chưa thuế', 'Thuế suất',
+            'Tiền thuế', 'Thành tiền', 'Số lô', 'EXP', 'Ghi chú'];
         var body = '<table border="1"><thead><tr>'
             + cols.map(function (c) { return '<th style="background:#e2e8f0">' + esc(c) + '</th>'; }).join('')
             + '</tr></thead><tbody>';
