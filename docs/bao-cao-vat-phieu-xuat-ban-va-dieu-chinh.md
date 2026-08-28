@@ -77,11 +77,11 @@ Bộ lọc **Loại phiếu**: `Phiếu thường` (bỏ bill Z — mặc địn
 | 14 | Tên công ty bên mua | `vi.buyer_name` / meta `tax_invoice_buyer.customer_company_name` / tên KH |
 | 15 | Tên KH | nhãn bán lẻ (`TGS_Viettel_Invoice_Flow_Service::is_retail_buyer`) → "Bán cho người tiêu dùng" hoặc tên thật |
 | 16–19 | Địa chỉ / Email / Điện thoại / MST bên mua | meta `tax_invoice_buyer.*` → khách của phiếu |
-| 20–23 | Địa chỉ / Tên / Điện thoại / MST bên bán | `get_blog_option($blog_id, 'tgs_shop_address' / 'blogname' / 'tgs_shop_phone' / 'tgs_shop_tax_code')`; MST dự phòng `wp_global_vat_shops.tax_code` |
+| 20–23 | Địa chỉ / Tên / Điện thoại / MST bên bán | **SNAPSHOT cấu hình Viettel của chính hoá đơn** — `wp_tgs_viettel_invoice_config_snapshots.settings_json` (`company_name` / `company_address` / `company_phone` / `supplier_tax_code`), qua `TGS_Viettel_Invoice_Plugin::get_settings_for_invoice($vi_id, $blog_id)`. Chưa có hoá đơn → cấu hình cụm đang hiệu lực (`wp_tgs_viettel_invoice_clusters.legal_*`). Cuối cùng: option blog, rồi `result.supplierTaxCode` trong payload. Xem `TGS_BCTK_Report::seller_info()` |
 | 24 | Ngày xuất | `local_ledger.created_at` (phiếu bán / phiếu hoàn) |
 | 25 | Số phiếu xuất | `local_ledger_code` (mã phiếu bên mình) |
 | 26 | Nhân viên xuất | `display_name` theo `local_ledger.user_id` |
-| 27 | Lý do | hằng `XBA` (xuất bán) · `DCG` (điều chỉnh giảm) |
+| 27 | Lý do | hằng `XBA` (xuất bán) · `NTH1` (nhập trả hàng — điều chỉnh giảm) |
 | 28 | Trạng thái VAT | `TGS_BCTK_Report::vat_state_label()` — "Hóa đơn có chữ ký số" / "Hóa đơn chưa lập VAT" / "Đang xử lý" / "Gửi lỗi VAT" / "Bỏ qua" |
 | 29 | Số SO | để trống |
 | 30 | SL bản ghi | số dòng hàng của phiếu |
@@ -101,12 +101,18 @@ của phiếu hoàn (type 3), cùng cách `build_payload()` của return-adjustm
 Bấm một dòng → modal (`partials/vat-detail-modal.php`):
 
 - 3 khối: **Đơn vị bán hàng** · **Người mua** · **Chứng từ**.
-- Bảng dòng hàng bố cục hoá đơn: STT · Tên · ĐVT · SL · Đơn giá (sau CK trước
-  thuế) · Thành tiền chưa thuế · Thuế suất · Tiền thuế · Thành tiền · số tiền
-  bằng chữ.
-- Nút **Xem PDF hóa đơn** — hiện khi `invoice_state = 'done'`. Gọi endpoint sẵn
-  có `tgs_viettel_pos_preview_invoice_pdf` của `tgs-viettel-invoice` (nhận
-  `blog_id` + nonce POS, tự `switch_to_blog`), nhúng base64 vào `<iframe>`.
+- Bảng dòng hàng bố cục **phần mềm cũ** (kế toán quen mắt, và để tận dụng làm
+  base sửa phiếu): STT · **Mã hàng** · Tên hàng · **Kho** (= mã shop) · ĐVT · SL
+  · Đơn giá (giá POS, trước CK sau thuế) · **CK** · Thành tiền chưa thuế · Thuế
+  suất · Tiền thuế · Thành tiền · **Ghi chú**. Mỗi dòng kèm `item_id` để base
+  sửa/xoá dòng bám vào. Tên hàng trống trên phiếu thì bồi từ catalog global
+  (`TGS_BCTK_Report::product_info()`).
+- Nút **Xem PDF hóa đơn** — hiện khi `invoice_state = 'done'`. Gọi AJAX RIÊNG của
+  bc-tk `tgs_bctk_vat_pdf` (`TGS_BCTK_Ajax::vat_pdf()`): `switch_to_blog` →
+  đọc `{prefix}local_viettel_invoice` theo prefix thật → cấu hình Viettel từ
+  SNAPSHOT → gọi `getInvoiceRepresentationFile`. **KHÔNG** gọi lại
+  `tgs_viettel_pos_preview_invoice_pdf` vì endpoint đó bám hằng số `TGS_TABLE_*`
+  của site tổng nên tra nhầm bảng khi chạy chéo site.
 - Với **Phiếu điều chỉnh giảm**, nút PDF mở hoá đơn **GỐC** của đơn bán để đối
   chiếu (chưa có endpoint PDF riêng cho hoá đơn điều chỉnh).
 
@@ -130,11 +136,24 @@ không gọi thêm AJAX.
 
 ---
 
-## 6. Chưa làm (chờ hướng dẫn)
+## 6. Bước tiếp theo — MODAL PHIẾU DÙNG CHUNG (chờ danh sách sự kiện)
 
-- **Sửa phiếu** khi chưa có thông tin VAT (phiếu nội bộ: sửa thoải mái).
-- **Gửi lại** hoá đơn / các trường hợp gửi lại.
-- **Điều chỉnh / thay thế** hoá đơn từ màn này.
-- Endpoint PDF riêng cho hoá đơn điều chỉnh giảm.
-- Luồng trạng thái cuối: "được cơ quan thuế chấp nhận" (hiện gộp vào "Hóa đơn có
-  chữ ký số").
+Modal hiện tại (chỉ đọc) là **bản mẫu** cho một component dùng chung TOÀN BỘ
+BC_TK — Sổ CSKH, Báo cáo bán hàng, Tổng hợp bán hàng, và menu Mua hàng (Tồn
+kho, Sổ kho theo mặt hàng, Phân tích mua hàng, Báo cáo mua hàng, Tổng hợp mua
+hàng). Ý tưởng: **truyền vào `loại` + `blog_id` + mã phiếu → mở modal xem, rồi
+thêm / sửa / xoá dòng khi cần**. Tiền luôn theo
+`tgs_shop_management/docs/mo-hinh-tien-va-bang-local-ledger-item.md`.
+
+Nút sự kiện (bố trí gọn theo nhóm, chờ chốt chi tiết):
+
+| Điều kiện phiếu | Sự kiện cho phép |
+|---|---|
+| Chưa gửi thuế / chưa phát hành | Sửa phiếu (thêm/sửa/xoá dòng), **tách bill Z** (đúng luồng nhân viên ở `tgs_pos/docs/bill-z-va-hang-tang.md`), gửi thuế |
+| Đã phát hành hoá đơn | **Điều chỉnh** / **thay thế** hoá đơn (không sửa trực tiếp) |
+| Phiếu nội bộ (bill Z) | Sửa thoải mái, không dính thuế |
+| Gửi lỗi | Gửi lại |
+
+Chưa làm: các sự kiện trên; endpoint PDF riêng cho hoá đơn điều chỉnh; luồng
+trạng thái cuối "được cơ quan thuế chấp nhận" (hiện gộp vào "Hóa đơn có chữ ký
+số").

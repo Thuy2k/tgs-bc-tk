@@ -586,10 +586,18 @@
 .bctk-vat-card dt { color: #64748b; }
 .bctk-vat-card dd { margin: 0; color: #0f172a; word-break: break-word; }
 
-.bctk-vat-modal__tablewrap { overflow: auto; border: 1px solid #e2e8f0; border-radius: 8px; }
+.bctk-vat-modal__tablewrap { overflow: auto; border: 1px solid #e2e8f0; border-radius: 8px; max-height: 46vh; }
 .bctk-vat-items { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .bctk-vat-items th,
-.bctk-vat-items td { padding: 5px 8px; border-bottom: 1px solid #eef2f7; text-align: left; }
+.bctk-vat-items td {
+    padding: 5px 8px;
+    border-bottom: 1px solid #eef2f7;
+    border-right: 1px solid #f2f5f9;
+    text-align: left;
+    white-space: nowrap;
+}
+.bctk-vat-items td:nth-child(3) { white-space: normal; min-width: 200px; }
+.bctk-vat-items td:last-child { white-space: normal; min-width: 140px; }
 .bctk-vat-items thead th { background: #f1f5f9; font-weight: 600; position: sticky; top: 0; }
 .bctk-vat-items .c-num { text-align: right; font-variant-numeric: tabular-nums; }
 .bctk-vat-items tfoot td { font-weight: 700; background: #f8fafc; border-top: 2px solid #cbd5e1; }

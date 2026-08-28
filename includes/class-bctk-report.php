@@ -1711,7 +1711,8 @@ class TGS_BCTK_Report
                         COALESCE(i.local_ledger_item_product_name_cache, pn.local_product_name, '') AS ten,
                         COALESCE(NULLIF(i.local_ledger_item_unit_name, ''), pn.local_product_unit, '') AS dvt,
                         COALESCE(NULLIF(i.local_ledger_item_unit_ratio, 0), 1) AS ratio,
-                        COALESCE(i.local_ledger_item_unit_quantity, 0)   AS sl_dvt
+                        COALESCE(i.local_ledger_item_unit_quantity, 0)   AS sl_dvt,
+                        COALESCE(i.local_ledger_item_note, '')           AS li_note
                    FROM {$item_table} i
                    LEFT JOIN {$pname_table} pn ON pn.local_product_name_id = i.local_product_name_id
                   WHERE i.local_ledger_item_id IN ({$ph})
@@ -1800,6 +1801,7 @@ class TGS_BCTK_Report
                 q.id                     AS queue_id,
                 q.status                 AS queue_status,
                 q.sale_ledger_id         AS sale_id,
+                COALESCE(NULLIF(q.adjustment_invoice_record_id, 0), NULLIF(q.original_invoice_record_id, 0)) AS vi_id,
                 q.original_invoice_no    AS so_hd_goc,
                 q.adjustment_invoice_no  AS so_hd,
                 q.error_message          AS queue_error,
@@ -1909,7 +1911,8 @@ class TGS_BCTK_Report
                         COALESCE(i.local_ledger_item_product_name_cache, pn.local_product_name, '') AS ten,
                         COALESCE(NULLIF(i.local_ledger_item_unit_name, ''), pn.local_product_unit, '') AS dvt,
                         COALESCE(NULLIF(i.local_ledger_item_unit_ratio, 0), 1) AS ratio,
-                        COALESCE(i.local_ledger_item_unit_quantity, 0)   AS sl_dvt
+                        COALESCE(i.local_ledger_item_unit_quantity, 0)   AS sl_dvt,
+                        COALESCE(i.local_ledger_item_note, '')           AS li_note
                    FROM {$item_table} i
                    LEFT JOIN {$pname_table} pn ON pn.local_product_name_id = i.local_product_name_id
                   WHERE i.local_ledger_item_id IN ({$ph})
@@ -1966,25 +1969,58 @@ class TGS_BCTK_Report
     }
 
     /**
-     * Thông tin ĐƠN VỊ BÁN của một site — đọc từ option của chính blog đó.
-     * Cache theo request để nhiều dòng cùng site không hỏi lại option.
+     * Thông tin ĐƠN VỊ BÁN đúng như lúc phát hành hoá đơn.
+     *
+     * Ưu tiên SNAPSHOT cấu hình Viettel đã chốt cho hoá đơn đó
+     * (wp_tgs_viettel_invoice_config_snapshots — xem
+     * TGS_Viettel_Invoice_Plugin::get_settings_for_invoice) để đối chiếu về sau vẫn
+     * đúng dù cụm cấu hình shop đã đổi. Không có bản ghi hoá đơn thì lấy cấu
+     * hình cụm đang hiệu lực; cuối cùng mới tới option của blog.
+     *
+     * @param int $blog_id
+     * @param int $invoice_record_id local_viettel_invoice_id (0 nếu chưa có)
      */
     private static $seller_cache = [];
 
-    public static function seller_info($blog_id)
+    public static function seller_info($blog_id, $invoice_record_id = 0)
     {
         $blog_id = (int) $blog_id;
-        if (isset(self::$seller_cache[$blog_id])) {
-            return self::$seller_cache[$blog_id];
+        $invoice_record_id = (int) $invoice_record_id;
+        $key = $blog_id . ':' . $invoice_record_id;
+        if (isset(self::$seller_cache[$key])) {
+            return self::$seller_cache[$key];
         }
 
-        $name = get_blog_option($blog_id, 'blogname', '');
-        $addr = get_blog_option($blog_id, 'tgs_shop_address', '');
-        $phone = get_blog_option($blog_id, 'tgs_shop_phone', '');
-        $mst = get_blog_option($blog_id, 'tgs_shop_tax_code', '');
+        $name = $addr = $phone = $mst = '';
+        $series = $template = $payment = '';
 
-        // Dự phòng MST: bảng shop áp dụng VAT
-        if (trim((string) $mst) === '' && class_exists('TGS_BCTK_Vat_Shops')) {
+        if (class_exists('TGS_Viettel_Invoice_Plugin')
+            && method_exists('TGS_Viettel_Invoice_Plugin', 'get_settings_for_invoice')) {
+            $s = (array) TGS_Viettel_Invoice_Plugin::get_settings_for_invoice($invoice_record_id, $blog_id);
+            $name     = (string) ($s['company_name'] ?? $s['legal_name'] ?? '');
+            $addr     = (string) ($s['company_address'] ?? $s['legal_address'] ?? '');
+            $phone    = (string) ($s['company_phone'] ?? $s['legal_phone'] ?? '');
+            $mst      = (string) ($s['supplier_tax_code'] ?? '');
+            $series   = (string) ($s['default_invoice_series'] ?? '');
+            $template = (string) ($s['default_template_code'] ?? '');
+            $payment  = (string) ($s['default_payment_method'] ?? '');
+        }
+
+        if ($name === '') {
+            $name = (string) get_blog_option($blog_id, 'blogname', '');
+        }
+        if ($addr === '') {
+            $addr = (string) get_blog_option($blog_id, 'tgs_shop_address', '');
+        }
+        if ($phone === '') {
+            $phone = (string) get_blog_option($blog_id, 'tgs_shop_phone', '');
+        }
+        if ($mst === '') {
+            $mst = (string) get_blog_option($blog_id, 'tgs_shop_tax_code', '');
+        }
+
+        // Dự phòng cuối cho MST: bảng shop áp dụng VAT
+        if (trim($mst) === '' && class_exists('TGS_BCTK_Vat_Shops')) {
             foreach (TGS_BCTK_Vat_Shops::all(false) as $shop) {
                 if ((int) ($shop['blog_id'] ?? 0) === $blog_id && !empty($shop['tax_code'])) {
                     $mst = (string) $shop['tax_code'];
@@ -1993,11 +2029,14 @@ class TGS_BCTK_Report
             }
         }
 
-        return self::$seller_cache[$blog_id] = [
-            'name'  => (string) $name,
-            'addr'  => (string) $addr,
-            'phone' => (string) $phone,
-            'mst'   => (string) $mst,
+        return self::$seller_cache[$key] = [
+            'name'     => $name,
+            'addr'     => $addr,
+            'phone'    => $phone,
+            'mst'      => $mst,
+            'series'   => $series,
+            'template' => $template,
+            'payment'  => $payment,
         ];
     }
 

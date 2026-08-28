@@ -82,6 +82,7 @@ class TGS_BCTK_Ajax
         add_action('wp_ajax_tgs_bctk_fetch_purchase_sum', [__CLASS__, 'fetch_purchase_sum']);
         add_action('wp_ajax_tgs_bctk_fetch_vat_sales', [__CLASS__, 'fetch_vat_sales']);
         add_action('wp_ajax_tgs_bctk_fetch_vat_adjust', [__CLASS__, 'fetch_vat_adjust']);
+        add_action('wp_ajax_tgs_bctk_vat_pdf', [__CLASS__, 'vat_pdf']);
         add_action('wp_ajax_tgs_bctk_refresh_nonce', [__CLASS__, 'refresh_nonce']);
     }
 
@@ -1215,8 +1216,13 @@ class TGS_BCTK_Ajax
             'tt_chua_thue'      => $tt_chua_thue,
             'thue'              => $thue,
             'thanh_tien'        => $thanh_tien,
+            // CK thô (trước thuế, cả dòng) — để cộng "Tổng chiết khấu"
             'ck'                => $ck,
+            // CK hiển thị theo bill (sau thuế) — cho cột CK trong modal
+            'ck_hien'           => round($ck * (1 + $tax_pct / 100)),
             'don_gia_gui_thue'  => round((float) $m['don_gia_gui_thue']),
+            // Đơn giá POS hiển thị (trước CK, sau thuế) — quen mắt kế toán
+            'don_gia_sau_thue'  => round((float) $m['don_gia_sau_thue']),
             'tax_pct'           => $is_kct ? null : $tax_pct,
             'tax_pct_raw'       => ($raw_pct === null || $raw_pct === '') ? null : (float) $raw_pct,
             'is_kct'            => $is_kct,
@@ -1324,11 +1330,13 @@ class TGS_BCTK_Ajax
      *
      * @param array  $r         dòng thô từ site_vat_*_rows()
      * @param string $ma_shop   mã shop
-     * @param string $ly_do     'XBA' | 'DCG'
+     * @param string $ly_do     'XBA' (xuất bán) | 'NTH1' (nhập trả hàng — điều chỉnh giảm)
      * @param float  $sign      1 (bán) | -1 (điều chỉnh giảm)
      */
     private static function build_vat_row(array $r, $ma_shop, $ly_do, $sign)
     {
+        $is_adjust = ($sign < 0);
+
         // Dấu cho báo cáo điều chỉnh giảm; tránh -0 lọt ra JSON
         $s = static function ($v) use ($sign) {
             $v = $v * $sign;
@@ -1361,17 +1369,25 @@ class TGS_BCTK_Ajax
 
             $items[] = [
                 'stt'            => $stt++,
+                // Cột kế toán quen nhìn (bố cục phần mềm cũ) — để tiện làm base sửa phiếu
+                'ma_hang'        => (string) ($it['sku'] ?? ''),
                 'ten'            => (string) ($it['ten'] ?? ''),
-                'sku'            => (string) ($it['sku'] ?? ''),
+                'kho'            => $ma_shop,
                 'dvt'            => (string) ($it['dvt'] ?? ''),
                 'sl'             => $s((float) ($it['qty'] ?? 0)),
-                'don_gia'        => $mo['don_gia_gui_thue'],
+                // Đơn giá: bán → giá POS (trước CK, sau thuế); vẫn kèm giá gửi thuế
+                'don_gia'        => $mo['don_gia_sau_thue'],
+                'don_gia_gui_thue' => $mo['don_gia_gui_thue'],
+                'ck'             => $s($mo['ck_hien']),
                 'tien_chua_thue' => $s($mo['tt_chua_thue']),
                 'thue_suat'      => $mo['is_kct'] ? 'KCT'
                     : ($mo['tax_pct_raw'] === null ? 'Chưa khai' : ($mo['tax_pct'] + 0)),
                 'tien_thue'      => $s($mo['thue']),
                 'thanh_tien'     => $s($mo['thanh_tien']),
+                'ghi_chu'        => (string) ($it['li_note'] ?? ''),
                 'is_gift'        => (int) ($it['gift_type'] ?? 0) === 1,
+                // id dòng — để base sửa/xoá dòng sau này bám vào
+                'item_id'        => (int) ($it['id'] ?? 0),
             ];
         }
 
@@ -1380,14 +1396,14 @@ class TGS_BCTK_Ajax
         $vat_state    = strtolower(trim((string) ($r['vat_state'] ?? '')));
         $queue_status = strtolower(trim((string) ($r['queue_status'] ?? '')));
         $has_vat      = !empty($r['vi_id']) || $vat_state !== ''
-            || ($ly_do === 'DCG' && $queue_status !== '' && $queue_status !== 'pending');
+            || ($is_adjust && $queue_status !== '' && $queue_status !== 'pending');
 
         /*
          * Phiếu điều chỉnh chưa phát hành thì chưa có invoice_state — suy nhãn
          * trạng thái từ trạng thái hàng đợi để kế toán biết việc đang ở đâu.
          */
         $state_label = TGS_BCTK_Report::vat_state_label($vat_state, $has_vat);
-        if ($ly_do === 'DCG' && $vat_state === '') {
+        if ($is_adjust && $vat_state === '') {
             $map = [
                 'pending'  => 'Chờ xử lý điều chỉnh',
                 'blocked'  => 'Đang xử lý',
@@ -1413,9 +1429,15 @@ class TGS_BCTK_Ajax
         $mua_cty_raw = self::first_nonempty([$r['b_company'] ?? '', $r['vi_buyer_name'] ?? '', $r['kh_ten'] ?? '']);
         $mua_cty = self::is_placeholder_name($mua_cty_raw) ? '' : $mua_cty_raw;
 
-        $seller = TGS_BCTK_Report::seller_info((int) $r['_blog_id']);
+        /*
+         * Thông tin bên bán lấy từ SNAPSHOT cấu hình Viettel của chính hoá đơn
+         * (wp_tgs_viettel_invoice_config_snapshots) để đối chiếu về sau vẫn
+         * đúng; chưa có hoá đơn thì lấy cấu hình cụm đang hiệu lực. Xem
+         * TGS_BCTK_Report::seller_info().
+         */
+        $seller = TGS_BCTK_Report::seller_info((int) $r['_blog_id'], (int) ($r['vi_id'] ?? 0));
 
-        // MST bên bán: option shop trống thì lấy đúng cái đã gửi CQT trong payload
+        // MST bên bán: snapshot trống thì lấy đúng cái đã gửi CQT trong payload
         $seller_mst = $seller['mst'];
         if (trim((string) $seller_mst) === '') {
             $seller_mst = self::parse_payload_path($r['issue_payload'] ?? '', [
@@ -1423,20 +1445,21 @@ class TGS_BCTK_Ajax
             ]);
         }
 
-        $so_hd = ($ly_do === 'DCG')
+        $so_hd = $is_adjust
             ? (string) ($r['so_hd'] ?? '')
             : self::parse_invoice_no($r['issue_payload'] ?? '', $r['so_hd'] ?? '');
 
         $ghi_chu = self::extract_order_note($r['ghi_chu'] ?? '');
-        if ($ly_do === 'DCG' && trim((string) ($r['so_hd_goc'] ?? '')) !== '') {
+        if ($is_adjust && trim((string) ($r['so_hd_goc'] ?? '')) !== '') {
             $ghi_chu = trim('HĐ gốc: ' . $r['so_hd_goc'] . ($ghi_chu !== '' ? ' — ' . $ghi_chu : ''));
         }
 
         return [
             'ma_shop'        => $ma_shop,
-            'seri'           => (string) ($r['seri'] ?? ''),
-            'mau_hd'         => (string) ($r['mau_hd'] ?? ''),
-            'httt'           => (string) ($r['httt'] ?? ''),
+            // Seri/Mẫu/HTTT: bản ghi hoá đơn trống thì lấy mặc định của cụm cấu hình
+            'seri'           => self::first_nonempty([$r['seri'] ?? '', $seller['series'] ?? '']),
+            'mau_hd'         => self::first_nonempty([$r['mau_hd'] ?? '', $seller['template'] ?? '']),
+            'httt'           => self::first_nonempty([$r['httt'] ?? '', $seller['payment'] ?? '']),
             'ma_kh'          => (string) ($r['kh_dt'] ?? ''),
             'so_hd'          => $so_hd,
             'ghi_chu'        => $ghi_chu,
@@ -1586,13 +1609,166 @@ class TGS_BCTK_Ajax
         $rows = [];
         foreach ($raw as $r) {
             $r['_blog_id'] = $p['blog_id'];
-            $row = self::build_vat_row($r, $ma_shop, 'DCG', -1.0);
+            $row = self::build_vat_row($r, $ma_shop, 'NTH1', -1.0);
             if (self::vat_row_passes_filter($row, $p['vat_filter'])) {
                 $rows[] = $row;
             }
         }
 
         wp_send_json_success(['rows' => $rows]);
+    }
+
+    /**
+     * PDF hoá đơn Viettel cho một phiếu bán — chạy ĐÚNG SITE của phiếu.
+     *
+     * KHÔNG gọi lại endpoint POS tgs_viettel_pos_preview_invoice_pdf: endpoint
+     * đó dùng hằng số TGS_TABLE_* đã định nghĩa theo prefix của site đang đứng
+     * (site tổng), nên gọi chéo site khác là tra nhầm bảng → "không tìm thấy
+     * hoá đơn". Ở đây switch_to_blog rồi đọc bảng theo prefix thật, cấu hình
+     * Viettel lấy từ SNAPSHOT của chính hoá đơn.
+     */
+    public static function vat_pdf()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền xem PDF hoá đơn.'], 403);
+        }
+
+        $blog_id = isset($_POST['blog_id']) ? (int) $_POST['blog_id'] : 0;
+        $sale_id = isset($_POST['sale_ledger_id']) ? (int) $_POST['sale_ledger_id'] : 0;
+        if ($blog_id <= 0 || $sale_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu blog_id hoặc sale_ledger_id.'], 400);
+        }
+        if (!class_exists('TGS_Viettel_Invoice_Plugin')) {
+            wp_send_json_error(['message' => 'Chưa bật plugin tgs-viettel-invoice.'], 500);
+        }
+
+        $switched = false;
+        if (function_exists('switch_to_blog') && get_current_blog_id() !== $blog_id) {
+            switch_to_blog($blog_id);
+            $switched = true;
+        }
+
+        try {
+            global $wpdb;
+            $vi_table = $wpdb->prefix . 'local_viettel_invoice';
+            $row = $wpdb->get_row($wpdb->prepare(
+                "SELECT local_viettel_invoice_id, invoice_state, template_code,
+                        viettel_invoice_no, issue_response_payload
+                   FROM {$vi_table}
+                  WHERE sale_ledger_id = %d
+                    AND (is_deleted = 0 OR is_deleted IS NULL)
+                  ORDER BY local_viettel_invoice_id DESC LIMIT 1",
+                $sale_id
+            ), ARRAY_A);
+
+            if (empty($row)) {
+                wp_send_json_error(['message' => 'Đơn này chưa có hoá đơn Viettel.'], 404);
+            }
+            if (strtolower((string) ($row['invoice_state'] ?? '')) !== 'done') {
+                wp_send_json_error(['message' => 'Hoá đơn chưa gửi CQT thành công nên chưa có bản thể hiện PDF.'], 400);
+            }
+
+            $invoice_no = trim((string) ($row['viettel_invoice_no'] ?? ''));
+            if ($invoice_no === '') {
+                $invoice_no = self::parse_payload_path($row['issue_response_payload'] ?? '', [
+                    ['result', 'invoiceNo'], ['data', 'invoiceNo'], ['invoiceNo'],
+                ]);
+            }
+            if ($invoice_no === '') {
+                wp_send_json_error(['message' => 'Không lấy được số hoá đơn để tải PDF.'], 400);
+            }
+
+            $vi_id    = (int) $row['local_viettel_invoice_id'];
+            $settings = (array) TGS_Viettel_Invoice_Plugin::get_settings_for_invoice($vi_id, $blog_id);
+            $mst      = (string) ($settings['supplier_tax_code'] ?? '');
+            $template = trim((string) ($row['template_code'] ?? ''));
+            if ($template === '') {
+                $template = (string) ($settings['default_template_code'] ?? '1/770');
+            }
+            if ($mst === '') {
+                wp_send_json_error(['message' => 'Thiếu MST người bán trong cấu hình Viettel của shop.'], 400);
+            }
+
+            $res = self::viettel_representation_file($settings, $mst, $invoice_no, $template);
+            if (empty($res['success'])) {
+                wp_send_json_error([
+                    'message'   => $res['message'] ?? 'Không lấy được PDF hoá đơn.',
+                    'http_code' => (int) ($res['http_code'] ?? 0),
+                ], 400);
+            }
+
+            $safe = preg_replace('/[^A-Za-z0-9\-_]/', '_', $invoice_no);
+            wp_send_json_success([
+                'invoice_no'        => $invoice_no,
+                'file_name'         => $mst . '-' . $safe . '.pdf',
+                'file_bytes_base64' => $res['file_bytes_base64'],
+            ]);
+        } finally {
+            if ($switched) {
+                restore_current_blog();
+            }
+        }
+    }
+
+    /**
+     * Gọi API getInvoiceRepresentationFile của Viettel.
+     *
+     * Chép tối thiểu từ TGS_Viettel_Invoice::fetch_invoice_representation_file()
+     * (hàm đó private nên không gọi trực tiếp được). Sửa một bên nhớ dòm bên kia.
+     */
+    private static function viettel_representation_file(array $settings, $mst, $invoice_no, $template, $file_type = 'PDF')
+    {
+        $base = untrailingslashit((string) ($settings['api_base_url'] ?? ''));
+        if ($base === '') {
+            return ['success' => false, 'message' => 'Thiếu api_base_url trong cấu hình Viettel.'];
+        }
+
+        $headers = ['Content-Type' => 'application/json', 'Connection' => 'keep-alive'];
+        if (($settings['auth_mode'] ?? 'basic') === 'token') {
+            $headers['Authorization'] = 'Bearer ' . ($settings['access_token'] ?? '');
+        } else {
+            $headers['Authorization'] = 'Basic ' . base64_encode(
+                ($settings['username'] ?? '') . ':' . ($settings['password'] ?? '')
+            );
+        }
+
+        $response = wp_remote_post(
+            $base . '/InvoiceAPI/InvoiceUtilsWS/getInvoiceRepresentationFile',
+            [
+                'headers'     => $headers,
+                'body'        => wp_json_encode([
+                    'supplierTaxCode' => (string) $mst,
+                    'invoiceNo'       => (string) $invoice_no,
+                    'templateCode'    => (string) $template,
+                    'fileType'        => (string) $file_type,
+                ], JSON_UNESCAPED_UNICODE),
+                'timeout'     => 60,
+                'httpversion' => '1.1',
+                'sslverify'   => !empty($settings['verify_ssl']),
+            ]
+        );
+
+        if (is_wp_error($response)) {
+            return ['success' => false, 'message' => $response->get_error_message()];
+        }
+
+        $code = (int) wp_remote_retrieve_response_code($response);
+        $body = (string) wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+
+        if ($code < 200 || $code >= 300 || !is_array($data)) {
+            return ['success' => false, 'http_code' => $code,
+                    'message' => 'Lấy file hoá đơn thất bại (HTTP ' . $code . ').'];
+        }
+
+        $bytes = (string) ($data['fileToBytes'] ?? '');
+        if ($bytes === '') {
+            return ['success' => false, 'http_code' => $code,
+                    'message' => sanitize_text_field($data['description'] ?? $data['message'] ?? 'API không trả về fileToBytes.')];
+        }
+
+        return ['success' => true, 'http_code' => $code, 'file_bytes_base64' => $bytes];
     }
 }
 

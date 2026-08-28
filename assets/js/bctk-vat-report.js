@@ -202,12 +202,13 @@
             set('httt', r.httt);
             set('ly_do', r.ly_do);
             set('trang_thai_vat', r.trang_thai_vat);
+            set('sum_ck', fmt(r.tong_ck));
             set('sum_chua_thue', fmt(r.tt_chua_thue));
             set('sum_thue', fmt(r.tong_thue));
             set('sum_thanh_tien', fmt(r.thanh_tien));
             set('thanh_tien_chu', r.thanh_tien_chu);
             set('note', isAdjust
-                ? 'Phiếu điều chỉnh giảm — các số tiền mang dấu âm. Nút "Xem PDF hóa đơn" mở hóa đơn GỐC của đơn bán để đối chiếu.'
+                ? 'Phiếu điều chỉnh giảm — các số tiền mang dấu âm (phần khai giảm so với hóa đơn gốc). Nút "Xem PDF hóa đơn" mở hóa đơn GỐC của đơn bán để đối chiếu.'
                 : '');
 
             var body = $('#bctkVatItemsBody').empty();
@@ -215,15 +216,18 @@
                 body.append(
                     '<tr' + (it.is_gift ? ' class="bctk-vat-items__gift"' : '') + '>'
                     + '<td>' + it.stt + '</td>'
-                    + '<td>' + esc(it.ten) + (it.is_gift ? ' <em>(KM)</em>' : '')
-                        + '<div class="bctk-vat-items__sku">' + esc(it.sku || '') + '</div></td>'
+                    + '<td>' + esc(it.ma_hang || '') + '</td>'
+                    + '<td>' + esc(it.ten) + (it.is_gift ? ' <em>(KM)</em>' : '') + '</td>'
+                    + '<td>' + esc(it.kho || '') + '</td>'
                     + '<td>' + esc(it.dvt) + '</td>'
                     + '<td class="c-num">' + fmt(it.sl) + '</td>'
                     + '<td class="c-num">' + fmt(it.don_gia) + '</td>'
+                    + '<td class="c-num">' + fmt(it.ck) + '</td>'
                     + '<td class="c-num">' + fmt(it.tien_chua_thue) + '</td>'
                     + '<td class="c-num">' + esc(rateText(it.thue_suat)) + '</td>'
                     + '<td class="c-num">' + fmt(it.tien_thue) + '</td>'
                     + '<td class="c-num">' + fmt(it.thanh_tien) + '</td>'
+                    + '<td>' + esc(it.ghi_chu || '') + '</td>'
                     + '</tr>'
                 );
             });
@@ -272,8 +276,8 @@
             $(this).prop('disabled', true);
 
             var fd = new FormData();
-            fd.append('action', 'tgs_viettel_pos_preview_invoice_pdf');
-            fd.append('nonce', CFG.posPdfNonce || '');
+            fd.append('action', 'tgs_bctk_vat_pdf');
+            fd.append('nonce', (window.TGS_BCTK && window.TGS_BCTK.nonce) || '');
             fd.append('blog_id', String(r.blog_id || ''));
             fd.append('sale_ledger_id', String(r.sale_id || ''));
 

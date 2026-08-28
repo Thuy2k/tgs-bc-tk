@@ -74,28 +74,34 @@ if (!defined('ABSPATH')) {
                     <thead>
                         <tr>
                             <th>STT</th>
-                            <th>Tên hàng hóa, dịch vụ</th>
+                            <th>Mã hàng</th>
+                            <th>Tên hàng</th>
+                            <th>Kho</th>
                             <th>ĐVT</th>
                             <th class="c-num">SL</th>
                             <th class="c-num">Đơn giá</th>
+                            <th class="c-num">CK</th>
                             <th class="c-num">Thành tiền chưa thuế</th>
                             <th class="c-num">Thuế suất</th>
                             <th class="c-num">Tiền thuế</th>
                             <th class="c-num">Thành tiền</th>
+                            <th>Ghi chú</th>
                         </tr>
                     </thead>
                     <tbody id="bctkVatItemsBody"></tbody>
                     <tfoot>
                         <tr>
-                            <td colspan="5">Tổng cộng</td>
+                            <td colspan="7">Tổng cộng</td>
+                            <td class="c-num" data-vat-field="sum_ck"></td>
                             <td class="c-num" data-vat-field="sum_chua_thue"></td>
                             <td></td>
                             <td class="c-num" data-vat-field="sum_thue"></td>
                             <td class="c-num" data-vat-field="sum_thanh_tien"></td>
+                            <td></td>
                         </tr>
                         <tr>
-                            <td colspan="8">Số tiền bằng chữ</td>
-                            <td class="bctk-vat-items__words" data-vat-field="thanh_tien_chu"></td>
+                            <td colspan="11">Số tiền bằng chữ</td>
+                            <td class="bctk-vat-items__words" colspan="2" data-vat-field="thanh_tien_chu"></td>
                         </tr>
                     </tfoot>
                 </table>
