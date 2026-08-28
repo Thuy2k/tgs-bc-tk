@@ -289,6 +289,36 @@ class TGS_BCTK_Plugin
             ]);
         }
 
+        /*
+         * Hai màn báo cáo MUA HÀNG: bấm một dòng → mở lại phiếu NHẬP KHO trên
+         * component modal RIÊNG cho phần mua (đơn giá trước thuế/CK, khối thông
+         * tin có nhà cung cấp). Chỉ đọc + sửa ghi chú.
+         */
+        if (in_array($view, [self::VIEW_PURREPORT, self::VIEW_PURSUM], true)) {
+            wp_enqueue_script(
+                'tgs-bctk-phieu-mua-modal',
+                TGS_BCTK_URL . 'assets/js/bctk-phieu-mua-modal.js',
+                ['jquery'],
+                TGS_BCTK_VERSION . '.' . @filemtime(TGS_BCTK_DIR . 'assets/js/bctk-phieu-mua-modal.js'),
+                true
+            );
+            wp_enqueue_script(
+                'tgs-bctk-phieu-mua-view',
+                TGS_BCTK_URL . 'assets/js/bctk-phieu-mua-view.js',
+                ['jquery', 'tgs-bctk-phieu-mua-modal'],
+                TGS_BCTK_VERSION . '.' . @filemtime(TGS_BCTK_DIR . 'assets/js/bctk-phieu-mua-view.js'),
+                true
+            );
+
+            $actor = wp_get_current_user();
+            wp_localize_script('tgs-bctk-phieu-mua-view', 'tgsBctkPhieuMuaView', [
+                'ajaxUrl'   => admin_url('admin-ajax.php'),
+                'nonce'     => wp_create_nonce(TGS_BCTK_Ajax::NONCE),
+                'actorId'   => (int) $actor->ID,
+                'actorName' => $actor->display_name ?: $actor->user_login,
+            ]);
+        }
+
         // Màn khai shop áp dụng VAT có JS riêng (thêm/sửa/xoá), các màn khác không cần
         if ($view === self::VIEW_VAT_SHOPS) {
             wp_enqueue_script(

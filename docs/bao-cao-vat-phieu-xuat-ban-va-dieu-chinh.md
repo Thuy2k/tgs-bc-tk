@@ -304,7 +304,42 @@ Cách nối:
   `TGSBctkPhieuModal.open(row, { editable: canNote, editableLines: false,
   onSaveNote, actions:[pdf] })`. Ghi chú lưu qua `tgs_bctk_vat_save_note` (đã có).
 
-### 6.5 Việc còn phải làm
+### 6.5 Xem lại phiếu ở 2 màn báo cáo MUA HÀNG (CHỈ ĐỌC) — base RIÊNG
+
+**Báo cáo mua hàng / Hàng trả nhà cung cấp · Tổng hợp mua hàng** — bấm một dòng
+→ mở lại **phiếu nhập kho** (`local_ledger_type = 1`, KHÔNG có phiếu cha). Vì cột
+mua khác hẳn bên bán nên có **component modal riêng** `bctk-phieu-mua-modal.js`
+(`window.TGSBctkPhieuMuaModal`):
+
+- **Đơn giá = TRƯỚC thuế, TRƯỚC chiết khấu** (đúng như lúc tạo phiếu nhập / như
+  HTsoft), không phải giá bán sau thuế như bên bán.
+- Cột dòng hàng: STT · Mã hàng · Tên hàng · Kho · SL · ĐVT · SL ĐVCB · **Đơn giá**
+  · **TT không VAT** (= SL ĐVCB × Đơn giá) · CK (VNĐ) · CK % · Thuế % · Thuế VNĐ ·
+  Thành tiền · Số lô · EXP · Ghi chú.
+- Khối thông tin: **NHÀ CUNG CẤP** (mã · tên · MST · địa chỉ · ĐT · email) thay
+  cho khách hàng; chứng từ có Lý do nhập, Hạn TT, Số HĐ, Ký hiệu HĐ, Ngày HĐ.
+- Tiền vẫn đi sát `mo-hinh-tien-va-bang-local-ledger-item.md`: mỗi dòng qua
+  `TGS_Money::line(qty, giá_trước_thuế, ck_trước_thuế, thuế%)`; **KHÔNG làm tròn**
+  (giống `build_purchase_rows()` — đây là giá vốn). Thuế lấy số đã lưu.
+- CHỈ ĐỌC + **sửa ghi chú** phiếu (ghi thẳng `local_ledger_note`, không tiền tố
+  POS) + **Xuất Excel phiếu**. Không sửa dòng hàng.
+
+Cách nối:
+- `site_purchase_rows` / `site_purchase_summary_rows` thêm
+  `IF(type = 1, local_ledger_id, 0) AS import_id` (dòng trả NCC type 16 → 0, không
+  mở được). `build_purchase_rows` / `build_purchase_sum_rows` gắn `blog_id` +
+  `import_id`.
+- `purchase-report.php` / `purchase-summary.php`: `rowHtml` gắn `data-blog` /
+  `data-import` + class `bctk-clickrow` (chỉ khi `import_id > 0`).
+- `enqueue_assets` cho `VIEW_PURREPORT / VIEW_PURSUM` nạp
+  `bctk-phieu-mua-modal.js` + `bctk-phieu-mua-view.js`, localize
+  `tgsBctkPhieuMuaView`.
+- `bctk-phieu-mua-view.js` — click `#bctkBody tr[data-import]` → POST
+  `tgs_bctk_phieu_mua_view` (`TGS_BCTK_Ajax::phieu_mua_view()` →
+  `import_ledger_row()`) → `TGSBctkPhieuMuaModal.open(row, { editable: true,
+  onSaveNote })`. Ghi chú lưu qua `tgs_bctk_phieu_mua_save_note`.
+
+### 6.6 Việc còn phải làm
 
 - Tự chỉnh **phiếu thu** khi tổng phiếu đổi (hiện chỉ cảnh báo).
 - **Gửi thuế / tách bill / gửi lại** chạy trong modal (hiện mở tab màn shop) —

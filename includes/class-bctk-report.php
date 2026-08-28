@@ -1292,6 +1292,7 @@ class TGS_BCTK_Report
                 COALESCE(li.local_ledger_item_warehouse_zone, '') AS zone,
                 li.local_product_sku                       AS sku,
                 t.local_ledger_code                        AS pnk,
+                IF(t.local_ledger_type = 1, t.local_ledger_id, 0) AS import_id,
                 t.created_at                               AS ngay,
                 COALESCE(t.local_ledger_code_source, '')   AS so_hd,
                 li.quantity                                AS qty,
@@ -1425,6 +1426,7 @@ class TGS_BCTK_Report
         $sql = "
             SELECT
                 d.local_ledger_code                        AS pnk,
+                IF(d.local_ledger_type = 1, d.local_ledger_id, 0) AS import_id,
                 d.local_ledger_type                        AS lt,
                 d.created_at                               AS ngay,
                 d.local_ledger_payment_due_date            AS han_tt,

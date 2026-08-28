@@ -87,6 +87,9 @@ class TGS_BCTK_Ajax
         add_action('wp_ajax_tgs_bctk_vat_save_note', [__CLASS__, 'vat_save_note']);
         // Xem lại MỘT phiếu bán từ các màn báo cáo bán hàng (chỉ đọc + sửa ghi chú)
         add_action('wp_ajax_tgs_bctk_phieu_view', [__CLASS__, 'phieu_view']);
+        // Xem lại MỘT phiếu NHẬP KHO từ 2 màn báo cáo mua hàng (chỉ đọc + sửa ghi chú)
+        add_action('wp_ajax_tgs_bctk_phieu_mua_view', [__CLASS__, 'phieu_mua_view']);
+        add_action('wp_ajax_tgs_bctk_phieu_mua_save_note', [__CLASS__, 'phieu_mua_save_note']);
         add_action('wp_ajax_tgs_bctk_product_search', [__CLASS__, 'product_search']);
         add_action('wp_ajax_tgs_bctk_product_units', [__CLASS__, 'product_units']);
         add_action('wp_ajax_tgs_bctk_refresh_nonce', [__CLASS__, 'refresh_nonce']);
@@ -342,6 +345,8 @@ class TGS_BCTK_Ajax
             $gia_dvt = $gia_dvcb * $ratio;
 
             $rows[] = [
+                'blog_id'  => $blog_id,
+                'import_id' => (int) ($r['import_id'] ?? 0),
                 'kho'      => $is_warehouse ? ($no_zone ? $site['name'] : $zone) : $site_label,
                 'no_zone'  => $no_zone,
                 'sku'      => (string) $r['sku'],
@@ -485,6 +490,8 @@ class TGS_BCTK_Ajax
             }
 
             $rows[] = [
+                'blog_id' => $blog_id,
+                'import_id' => (int) ($r['import_id'] ?? 0),
                 'kho'     => $is_warehouse ? ($no_zone ? $site['name'] : $zone) : $site_label,
                 'no_zone' => $no_zone,
                 'pnk'     => (string) $r['pnk'],
@@ -1963,6 +1970,231 @@ class TGS_BCTK_Ajax
         $r = $raw[0];
         $r['_blog_id'] = (int) $blog_id;
         return self::build_vat_row($r, self::site_code_of($blog_id), 'XBA', 1.0);
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════════
+     * XEM LẠI PHIẾU NHẬP KHO từ 2 màn báo cáo MUA HÀNG (Báo cáo mua hàng,
+     * Tổng hợp mua hàng). CHỈ ĐỌC — cho sửa ghi chú, không sửa dòng hàng.
+     *
+     * Base RIÊNG với bên bán vì cột mua khác hẳn: đơn giá là TRƯỚC thuế, TRƯỚC
+     * chiết khấu (đúng như lúc tạo phiếu nhập), khối thông tin có NHÀ CUNG CẤP.
+     * Tiền vẫn đi sát mo-hinh-tien-va-bang-local-ledger-item.md: mỗi dòng qua
+     * TGS_Money::line(qty, price_trước_thuế, ck_trước_thuế, thuế%); KHÔNG làm
+     * tròn (giống báo cáo mua hàng chi tiết — đây là giá vốn).
+     * ═══════════════════════════════════════════════════════════════════════ */
+
+    public static function phieu_mua_view()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền xem phiếu.'], 403);
+        }
+        if (!self::money_ready()) {
+            wp_send_json_error(['message' => 'Thiếu lớp tính tiền TGS_Money.'], 500);
+        }
+
+        $blog_id   = (int) ($_POST['blog_id'] ?? 0);
+        $import_id = (int) ($_POST['import_id'] ?? 0);
+        if ($blog_id <= 0 || $import_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu blog_id hoặc import_id.'], 400);
+        }
+
+        $row = self::import_ledger_row($blog_id, $import_id);
+        if (!$row) {
+            wp_send_json_error(['message' => 'Không tìm thấy phiếu nhập kho.'], 404);
+        }
+        wp_send_json_success(['row' => $row]);
+    }
+
+    /** Dựng payload MỘT phiếu nhập kho (type 1). Chạy chéo site qua prefix. */
+    private static function import_ledger_row($blog_id, $import_id)
+    {
+        global $wpdb;
+
+        $blog_id   = (int) $blog_id;
+        $import_id = (int) $import_id;
+
+        $prefix = $wpdb->get_blog_prefix($blog_id);
+        $L   = $prefix . 'local_ledger';
+        $LI  = $prefix . 'local_ledger_item';
+        $PN  = $prefix . 'local_product_name';
+        $SUP = $wpdb->base_prefix . 'global_supplier';
+
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $L)) !== $L) {
+            return null;
+        }
+
+        $head = $wpdb->get_row($wpdb->prepare(
+            "SELECT d.local_ledger_id, d.local_ledger_code, d.created_at,
+                    d.local_ledger_payment_due_date            AS han_tt,
+                    COALESCE(d.local_ledger_code_source, '')   AS so_hd,
+                    COALESCE(d.local_ledger_note, '')          AS note_raw,
+                    d.user_id,
+                    JSON_UNQUOTE(JSON_EXTRACT(d.local_ledger_advance_meta, '$.import_reason.code'))  AS ly_do_ma,
+                    JSON_UNQUOTE(JSON_EXTRACT(d.local_ledger_advance_meta, '$.import_reason.label')) AS ly_do_ten,
+                    JSON_UNQUOTE(JSON_EXTRACT(d.local_ledger_advance_meta, '$.invoice.symbol'))      AS hd_ky_hieu,
+                    JSON_UNQUOTE(JSON_EXTRACT(d.local_ledger_advance_meta, '$.invoice.date'))        AS hd_ngay,
+                    COALESCE(u.display_name, u.user_login, '') AS nv_ten,
+                    COALESCE(s.supplier_code, '')     AS ncc_ma,
+                    COALESCE(s.supplier_name, '')     AS ncc_ten,
+                    COALESCE(s.supplier_tax_code, '') AS ncc_mst,
+                    COALESCE(s.supplier_address, '')  AS ncc_dchi,
+                    COALESCE(s.supplier_phone, '')    AS ncc_dt,
+                    COALESCE(s.supplier_email, '')    AS ncc_email
+               FROM {$L} d
+               LEFT JOIN {$SUP} s ON s.supplier_id = d.supplier_id
+               LEFT JOIN {$wpdb->users} u ON u.ID = d.user_id
+              WHERE d.local_ledger_id = %d AND d.local_ledger_type = 1
+                AND (d.is_deleted = 0 OR d.is_deleted IS NULL)
+              LIMIT 1",
+            $import_id
+        ), ARRAY_A);
+        if (empty($head)) {
+            return null;
+        }
+
+        $raw = $wpdb->get_results($wpdb->prepare(
+            "SELECT i.local_ledger_item_id AS id,
+                    i.local_product_sku    AS sku,
+                    COALESCE(NULLIF(i.local_ledger_item_product_name_cache, ''), pn.local_product_name, '') AS ten,
+                    COALESCE(i.local_ledger_item_warehouse_zone, '') AS kho,
+                    i.quantity             AS qty,
+                    i.price                AS gia,
+                    COALESCE(i.local_ledger_item_discount_amount, 0) AS ck,
+                    COALESCE(i.local_ledger_item_tax_percent, 0)     AS thue_pct,
+                    COALESCE(i.local_ledger_item_tax_amount, 0)      AS thue_amt,
+                    COALESCE(i.local_ledger_item_unit_name, '')      AS dvt,
+                    COALESCE(i.local_ledger_item_unit_quantity, 0)   AS sl_dvmr,
+                    COALESCE(NULLIF(i.local_ledger_item_unit_ratio, 0), 1) AS ratio,
+                    COALESCE(i.lot_code, '') AS so_lo,
+                    i.exp_date              AS exp,
+                    COALESCE(i.local_ledger_item_note, '')     AS ghi_chu,
+                    COALESCE(i.local_ledger_item_is_kct, 0)    AS is_kct
+               FROM {$LI} i
+               LEFT JOIN {$PN} pn ON pn.local_product_name_id = i.local_product_name_id
+              WHERE i.local_ledger_id = %d AND i.local_ledger_item_type = 1
+                AND (i.is_deleted = 0 OR i.is_deleted IS NULL)
+              ORDER BY i.local_ledger_item_id ASC",
+            $import_id
+        ), ARRAY_A) ?: [];
+
+        $items = [];
+        $sum_before_ck = 0.0; $sum_before = 0.0; $sum_tax = 0.0; $sum_ck = 0.0; $grand = 0.0;
+        $stt = 0;
+        foreach ($raw as $it) {
+            $stt++;
+            $qty = (float) $it['qty'];
+            $gia = (float) $it['gia'];   // ĐVCB, trước thuế, trước CK
+            $ck  = (float) $it['ck'];    // cả dòng, trước thuế
+            $pct = (float) $it['thue_pct'];
+            $m   = TGS_Money::line($qty, $gia, $ck, $pct);
+            /* Dùng số thuế ĐÃ LƯU, KHÔNG làm tròn — giống build_purchase_rows() */
+            $tax   = (float) $it['thue_amt'];
+            $total = $m['tien_hang_sau_ck'] + $tax;
+
+            $ratio   = max(1.0, (float) $it['ratio']);
+            $sl_unit = ((float) $it['sl_dvmr']) ?: ($ratio > 0 ? $qty / $ratio : $qty);
+
+            $items[] = [
+                'stt'          => $stt,
+                'ma_hang'      => (string) $it['sku'],
+                'ten'          => (string) $it['ten'],
+                'kho'          => (string) $it['kho'],
+                'dvt'          => (string) $it['dvt'],
+                'sl'           => $sl_unit,
+                'ratio'        => $ratio,
+                'sl_dvcb'      => $qty,
+                'don_gia'      => $gia,               // TRƯỚC thuế, TRƯỚC CK (ĐVCB)
+                'don_gia_dvt'  => $gia * $ratio,
+                'tt_chua_ck'   => $m['tien_hang_truoc_ck'],
+                'ck'           => $ck,
+                'ck_pct'       => $m['ck_phan_tram'],
+                'tt_chua_thue' => $m['tien_hang_sau_ck'],
+                'thue_pct'     => ((int) $it['is_kct'] === 1) ? 'KCT' : $pct,
+                'tien_thue'    => $tax,
+                'thanh_tien'   => $total,
+                'so_lo'        => (string) $it['so_lo'],
+                'exp'          => self::clean_datetime($it['exp']),
+                'ghi_chu'      => (string) $it['ghi_chu'],
+            ];
+
+            $sum_before_ck += $m['tien_hang_truoc_ck'];
+            $sum_before    += $m['tien_hang_sau_ck'];
+            $sum_tax       += $tax;
+            $sum_ck        += $ck;
+            $grand         += $total;
+        }
+
+        return [
+            'blog_id'        => $blog_id,
+            'import_id'      => $import_id,
+            'so_phieu'       => (string) $head['local_ledger_code'],
+            'ngay_ct'        => (string) $head['created_at'],
+            'han_tt'         => self::clean_datetime($head['han_tt']),
+            'so_hd'          => (string) $head['so_hd'],
+            'hd_ky_hieu'     => (string) ($head['hd_ky_hieu'] ?? ''),
+            'hd_ngay'        => (string) ($head['hd_ngay'] ?? ''),
+            'ly_do'          => (string) ($head['ly_do_ma'] ?: 'NMH1'),
+            'ly_do_ten'      => (string) ($head['ly_do_ten'] ?: ''),
+            'ma_shop'        => self::site_code_of($blog_id),
+            'kho'            => $items ? ($items[0]['kho'] ?: '') : '',
+            'nv_ten'         => (string) $head['nv_ten'],
+            'user_id'        => (int) $head['user_id'],
+            'ncc_ma'         => (string) $head['ncc_ma'],
+            'ncc_ten'        => (string) $head['ncc_ten'],
+            'ncc_mst'        => (string) $head['ncc_mst'],
+            'ncc_dchi'       => (string) $head['ncc_dchi'],
+            'ncc_dt'         => (string) $head['ncc_dt'],
+            'ncc_email'      => (string) $head['ncc_email'],
+            'ghi_chu'        => trim((string) $head['note_raw']),
+            'tt_chua_ck'     => $sum_before_ck,
+            'tt_chua_thue'   => $sum_before,
+            'tong_thue'      => $sum_tax,
+            'tong_ck'        => $sum_ck,
+            'thanh_tien'     => $grand,
+            'thanh_tien_chu' => TGS_BCTK_Report::doc_tien_bang_chu(round($grand)),
+            'sl_ban_ghi'     => count($items),
+            'items'          => $items,
+        ];
+    }
+
+    public static function phieu_mua_save_note()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền sửa ghi chú.'], 403);
+        }
+
+        $blog_id   = (int) ($_POST['blog_id'] ?? 0);
+        $import_id = (int) ($_POST['import_id'] ?? 0);
+        $note = trim(sanitize_textarea_field((string) wp_unslash($_POST['note'] ?? '')));
+        if ($blog_id <= 0 || $import_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu blog_id hoặc import_id.'], 400);
+        }
+
+        $switched = false;
+        if (function_exists('switch_to_blog') && get_current_blog_id() !== $blog_id) {
+            switch_to_blog($blog_id);
+            $switched = true;
+        }
+
+        try {
+            global $wpdb;
+            $L  = $wpdb->prefix . 'local_ledger';
+            $ok = $wpdb->query($wpdb->prepare(
+                "UPDATE {$L} SET local_ledger_note = %s, updated_at = %s
+                  WHERE local_ledger_id = %d AND local_ledger_type = 1 LIMIT 1",
+                $note, current_time('mysql'), $import_id
+            ));
+
+            if ($switched) { restore_current_blog(); $switched = false; }
+            if ($ok === false) {
+                wp_send_json_error(['message' => 'Lưu ghi chú thất bại.'], 500);
+            }
+            wp_send_json_success(['ghi_chu' => $note, 'message' => 'Đã lưu ghi chú.']);
+        } finally {
+            if ($switched) { restore_current_blog(); }
+        }
     }
 
     public static function vat_save_lines()
