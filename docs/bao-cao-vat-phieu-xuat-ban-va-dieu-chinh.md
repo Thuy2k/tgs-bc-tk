@@ -221,7 +221,24 @@ cột (Enter ở dòng cuối = thêm dòng). Bấm **💾 Lưu** →
 3. Mỗi dòng: quy `(SL, Đơn giá, CK)` — giá trị POS (sau thuế, trước CK) — về 5
    cột gốc bằng `TGS_Money::from_pos()` (thuế suất lấy như trên, không tin
    client); **UPDATE / INSERT / DELETE VĨNH VIỄN** (`$wpdb->delete`, không soft)
-   trên `local_ledger_item` của **phiếu xuất con** (type 2).
+   trên `local_ledger_item` của **phiếu xuất con** (type 2). Mỗi dòng cũng ghi:
+   - `local_ledger_item_price_after_discount` = `TGS_Money::line()['don_gia_gui_thue']`
+     (đơn giá SAU chiết khấu, TRƯỚC thuế, 1 ĐVCB). **Bắt buộc** — màn lịch sử đơn
+     / hoá đơn điện tử của `tgs_pos` (`get_order_receipt_data`) dựng ĐƠN GIÁ · CK
+     · THÀNH TIỀN trên bill từ cột này; không ghi thì bill hiện số CŨ (đơn giá +
+     thành tiền lệch, CK về 0).
+   - `global_product_name_id` **và** `local_product_name_id` = id trong
+     `wp_global_product_name` tra theo SKU (đúng luồng POS
+     `create_export_ledger` — cả hai cột đều mang id global; nếu site shop có
+     bản ghi `{prefix}local_product_name` riêng thì `local_product_name_id` ưu
+     tiên id local đó).
+   - `local_ledger_item_product_name_cache` = tên trong catalog global (không
+     tin ô "Tên hàng" gõ tay).
+   - `local_ledger_item_meta` (JSON) đúng khuôn POS `$item_meta` — `sku`,
+     `unit`, `unit_price_effective`, `subtotal_no_vat`, `discount_type` =
+     `vnd_line` (bc-tk nhập CK tiền cả dòng), `discount_amount`, `tax_percent`,
+     `is_kct`, `tax_amount`, `unit_quantity/ratio/name`, `total_weight_kg`, kèm
+     `edited_by_bctk` (user_id + thời điểm) để truy vết.
 4. **Đồng bộ `local_ledger_item_id` (JSON) cho CẢ CÂY PHIẾU** — đúng như luồng
    tạo đơn ở `tgs_pos` (`TGS_POS_Order_Handler::update_ledger_items`): danh sách
    id dòng hàng phải giống hệt trên **phiếu bán (10)** và **mọi phiếu con**
@@ -233,6 +250,12 @@ cột (Enter ở dòng cuối = thêm dòng). Bấm **💾 Lưu** →
 6. Đối chiếu tiền đã thu (phiếu thu type 7/8 đã duyệt); lệch ≥ 1đ → trả
    **cảnh báo** để kế toán xử phiếu thu / công nợ.
 7. Trả về payload phiếu mới → modal cập nhật tại chỗ, bảng chạy lại tìm kiếm.
+
+> Màn xem bill của `tgs_pos` (Đơn hàng ở app POS, Lịch sử đơn hàng, Sổ khách
+> hàng) **cache chi tiết bill phía client** (`detailCache` /
+> `orderDetailCache` / `customerOrderDetailCache`). Sau khi bc-tk sửa dòng hàng,
+> ba chỗ đó đã đổi sang **luôn tải mới** (`forceReload`) khi mở bill — nếu không
+> quầy mở lại bill sẽ thấy dòng hàng CŨ dù DB đã đúng.
 
 **Ghi chú phiếu** có nút **"✎ Sửa ghi chú"** riêng (dưới, khối Nhân viên & ghi
 chú) → textarea → `tgs_bctk_vat_save_note` (lưu đúng định dạng POS
@@ -246,11 +269,16 @@ Component `bctk-phieu-modal.js` nhận `editable` + `onSaveLines` + `onSaveNote`
 **các màn báo cáo khác** (bán hàng, mua hàng…) chỉ cần truyền callback tương tự
 là có ngay tính năng sửa.
 
-**Thêm dòng có gợi ý sản phẩm:** gõ vào ô **Mã hàng** hoặc **Tên hàng** (≥ 2 ký
-tự) → gợi ý từ catalog GLOBAL (`tgs_bctk_product_search` →
-`wp_global_product_name`, tìm theo sku / tên / barcode). Chọn (chuột hoặc ↓ ↑
-Enter) → tự điền sku · tên · ĐVT · đơn giá (nếu đang trống). Bảng global nên
-không cần `switch_to_blog`.
+**Chọn sản phẩm bằng BỘ CHỌN (modal con), KHÔNG gõ tay** — bám cách "Thêm sản
+phẩm" ở màn tạo phiếu, đỡ nhầm:
+- Ô **Mã hàng** / **Tên hàng** ở chế độ sửa là CHỈ HIỂN THỊ. Bấm ô Mã hàng →
+  mở bộ chọn ở chế độ **đổi** dòng đó. Bấm **"+ Thêm sản phẩm"** (hoặc Enter ở
+  dòng cuối) → bộ chọn ở chế độ **thêm** (thêm xong giữ modal mở để thêm tiếp,
+  đếm "Đã thêm N").
+- Trong bộ chọn: gõ ≥ 2 ký tự → tìm từ catalog GLOBAL (`tgs_bctk_product_search`
+  → `wp_global_product_name`, theo sku / tên / barcode). ↑ ↓ chọn, Enter / bấm
+  dòng để thêm. Chọn xong tự điền sku · tên · thuế suất · ĐVT ưu tiên · đơn giá
+  theo bảng giá. Bảng global nên không cần `switch_to_blog`.
 
 **ĐVT & đơn giá theo giỏ hàng `tgs_pos`:**
 - ĐVT là ô **chọn** trong các đơn vị của mã hàng (cấu hình bảng giá). Chọn sản

@@ -2288,13 +2288,14 @@ class TGS_BCTK_Ajax
                     if ($sk !== '') { $all_skus[$sk] = true; }
                 }
             }
-            $gp_tax = [];   // sku => ['pct','kct','name']
+            $gp_tax = [];   // sku => ['pct','kct','name','gid']
             if (!empty($all_skus)
                 && $wpdb->get_var("SHOW TABLES LIKE '" . esc_sql($gp_table) . "'") === $gp_table) {
                 $sk_list = array_keys($all_skus);
                 $ph = implode(',', array_fill(0, count($sk_list), '%s'));
                 foreach ((array) $wpdb->get_results($wpdb->prepare(
                     "SELECT global_product_sku AS sku,
+                            global_product_name_id             AS gid,
                             COALESCE(global_product_tax, 8)    AS pct,
                             COALESCE(global_product_is_kct, 0) AS kct,
                             COALESCE(global_product_name, '')  AS name
@@ -2302,6 +2303,7 @@ class TGS_BCTK_Ajax
                     ...$sk_list
                 ), ARRAY_A) as $g) {
                     $gp_tax[(string) $g['sku']] = [
+                        'gid'  => (int) $g['gid'],
                         'pct'  => (float) $g['pct'],
                         'kct'  => (int) $g['kct'],
                         'name' => (string) $g['name'],
@@ -2406,6 +2408,14 @@ class TGS_BCTK_Ajax
                     'local_ledger_item_tax_amount'      => $m['tax'],
                     'local_ledger_item_is_kct'          => $is_kct,
                     'local_ledger_item_note'            => $note,
+                    /*
+                     * Đơn giá SAU chiết khấu, TRƯỚC thuế, cho 1 ĐVCB — cột màn
+                     * lịch sử đơn / hoá đơn điện tử của tgs_pos đọc để dựng
+                     * ĐƠN GIÁ · CK · THÀNH TIỀN trên bill
+                     * (get_order_receipt_data). KHÔNG ghi cột này thì bill hiện
+                     * số CŨ (đơn giá + thành tiền lệch, CK về 0).
+                     */
+                    'local_ledger_item_price_after_discount' => $m['line']['don_gia_gui_thue'],
                     // ĐVT bán — cặp đi cùng: quantity(ĐVCB) = unit_quantity × unit_ratio
                     'local_ledger_item_unit_name'       => $dvt,
                     'local_ledger_item_unit_quantity'   => $sl_unit,
@@ -2417,21 +2427,57 @@ class TGS_BCTK_Ajax
                 if ($sku !== '') { $data['local_product_sku'] = $sku; }
 
                 /*
-                 * TRỎ SẢN PHẨM + TÊN CACHE theo luồng POS: ưu tiên bản ghi sản
-                 * phẩm LOCAL của site shop, rồi catalog GLOBAL; KHÔNG tin ô "Tên
-                 * hàng" người dùng gõ (chỉ dùng tạm khi mã lạ).
+                 * TRỎ SẢN PHẨM theo ĐÚNG luồng POS (create_export_ledger):
+                 * cả `global_product_name_id` LẪN `local_product_name_id` đều mang
+                 * `wp_global_product_name.global_product_name_id` (tra theo SKU).
+                 * Nếu site shop có bản ghi local riêng thì `local_product_name_id`
+                 * ưu tiên id local đó; còn `global_product_name_id` luôn là id
+                 * global. Không có gì thì để NULL (mã lạ).
                  */
                 $lpr = $lp[$sku] ?? null;
-                if ($lpr && $lpr['lid'] > 0) {
-                    $data['local_product_name_id'] = $lpr['lid'];
-                    if ($lpr['gid'] > 0) { $data['global_product_name_id'] = $lpr['gid']; }
+                $gid = (int) ($gp_tax[$sku]['gid'] ?? ($lpr['gid'] ?? 0));
+                if ($gid > 0) {
+                    $data['global_product_name_id'] = $gid;
+                    $data['local_product_name_id']  = ($lpr && $lpr['lid'] > 0) ? (int) $lpr['lid'] : $gid;
+                } elseif ($lpr && $lpr['lid'] > 0) {
+                    $data['local_product_name_id'] = (int) $lpr['lid'];
                 }
-                $cache_name = trim((string) ($lpr['name'] ?? ''));
-                if ($cache_name === '') { $cache_name = trim((string) ($gp_tax[$sku]['name'] ?? '')); }
+
+                $cache_name = trim((string) ($gp_tax[$sku]['name'] ?? ''));
+                if ($cache_name === '') { $cache_name = trim((string) ($lpr['name'] ?? '')); }
                 if ($cache_name === '') { $cache_name = $ten; }
                 if ($cache_name !== '') {
                     $data['local_ledger_item_product_name_cache'] = $cache_name;
                 }
+
+                /*
+                 * local_ledger_item_meta — JSON bổ sung, ĐÚNG khuôn POS
+                 * (TGS_POS_Order_Handler::create_export_ledger $item_meta) để màn
+                 * lịch sử đơn / hoá đơn điện tử đọc ra được. bc-tk nhập CK bằng
+                 * TIỀN CẢ DÒNG nên discount_type = 'vnd_line'.
+                 */
+                $data['local_ledger_item_meta'] = wp_json_encode([
+                    'sku'                  => $sku,
+                    'is_gift'              => false,
+                    'unit'                 => $dvt,
+                    'unit_price_effective' => (float) $m['price'],
+                    'subtotal_no_vat'      => (float) $m['price'] * $qty,
+                    'discount_type'        => 'vnd_line',
+                    'discount_value'       => (float) $m['discount'],
+                    'discount_amount'      => (float) $m['discount'],
+                    'tax_percent'          => (float) $pct,
+                    'is_kct'               => (int) $is_kct,
+                    'tax_amount'           => (float) $m['tax'],
+                    'unit_quantity'        => (float) $sl_unit,
+                    'unit_ratio'           => (float) $ratio,
+                    'unit_name'            => $dvt,
+                    'total_weight_kg'      => 0,
+                    'edited_by_bctk'       => [
+                        'user_id' => $uid,
+                        'at'      => $now,
+                        'source'  => 'bctk_vat_save_lines',
+                    ],
+                ], JSON_UNESCAPED_UNICODE);
 
                 if ($id > 0) {
                     $wpdb->update($LI, $data, ['local_ledger_item_id' => $id]);

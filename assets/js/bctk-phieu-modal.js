@@ -40,10 +40,14 @@
     var opts = {};
     var editing = false;
     var editLines = [];     // bản làm việc khi đang sửa
-    var acItems = [];       // kết quả tìm sản phẩm đang hiện
-    var acTarget = null;    // $input đang gõ
-    var acIdx = -1;
-    var acTimer = null;
+
+    // ── bộ chọn sản phẩm (modal con, thay cho gõ tay trong ô) ──
+    var pickMode = 'add';   // 'add' = thêm dòng mới · 'replace' = đổi dòng đang có
+    var pickRow = -1;       // chỉ số dòng khi replace
+    var pickItems = [];     // kết quả tìm hiện tại
+    var pickIdx = -1;       // dòng đang chọn bằng bàn phím
+    var pickTimer = null;
+    var pickAdded = 0;      // đã thêm bao nhiêu (mode add)
 
     function esc(s) {
         return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
@@ -182,7 +186,30 @@
         +     '<iframe id="pmPdfFrame" title="PDF hoá đơn" src="about:blank"></iframe>'
         +   '</div>'
 
-        +   '<div class="pm-ac bctk-hidden" id="pmAc"></div>'
+        +   '<div class="pm-pick bctk-hidden" id="pmPick">'
+        +     '<div class="pm-pick__card">'
+        +       '<div class="pm-pick__head">'
+        +         '<strong id="pmPickTitle">Thêm sản phẩm</strong>'
+        +         '<span class="pm-pick__count" id="pmPickCount"></span>'
+        +         '<button type="button" class="pm-modal__x" id="pmPickClose" title="Đóng">&times;</button>'
+        +       '</div>'
+        +       '<div class="pm-pick__bar">'
+        +         '<input type="text" id="pmPickSearch" autocomplete="off" '
+        +           'placeholder="Gõ mã hàng / tên hàng / barcode…">'
+        +       '</div>'
+        +       '<div class="pm-pick__wrap">'
+        +         '<table class="pm-pick__table" data-ds-no-grid data-ds-no-resize '
+        +           'data-ds-no-export data-ds-no-colcfg data-ds-no-filter><thead><tr>'
+        +           '<th>Mã hàng</th><th>Tên hàng</th><th>ĐVT</th>'
+        +           '<th class="c-num">Giá</th><th>Thuế</th>'
+        +         '</tr></thead><tbody id="pmPickBody"></tbody></table>'
+        +       '</div>'
+        +       '<div class="pm-pick__foot">'
+        +         '<span class="pm-pick__hint">↑ ↓ chọn · Enter / bấm dòng để thêm</span>'
+        +         '<button type="button" class="bctk-btn bctk-btn--primary" id="pmPickDone">Xong</button>'
+        +       '</div>'
+        +     '</div>'
+        +   '</div>'
         + '</div></div>';
 
         $('body').append(html);
@@ -198,24 +225,28 @@
         $m.on('click', '#pmEditStart', startEdit);
         $m.on('click', '#pmEditSave', saveEdit);
         $m.on('click', '#pmEditCancel', cancelEdit);
-        $m.on('click', '#pmEditAdd', addLine);
+        $m.on('click', '#pmEditAdd', function () { openPick('add', -1); });
         $m.on('click', '.pm-line__del', function () { delLine($(this).data('i')); });
         $m.on('input change', '.pm-line__in', onLineInput);
-        $m.on('input', '.pm-line__in[data-col="ma_hang"]', onSearchInput);
         $m.on('keydown', '.pm-line__in', onLineKey);
-        $m.on('blur', '.pm-line__in[data-col="ma_hang"]',
-            function () { setTimeout(acHide, 150); });
-        $m.on('mousedown', '.pm-ac__row', function (e) {
-            e.preventDefault();
-            acPick(acItems[parseInt($(this).data('i'), 10)]);
-        });
         $m.on('click', '#pmNoteEdit', startNoteEdit);
         $m.on('click', '#pmExport', exportPhieu);
-        $m.on('scroll', '.pm-lines', acHide);
+
+        // ── chọn sản phẩm từ danh mục (thay cho gõ tay + gợi ý trong ô) ──
+        $m.on('click', '.pm-pick-cell', function () {
+            openPick('replace', parseInt($(this).data('i'), 10));
+        });
+        $m.on('click', '#pmPickClose, #pmPickDone', closePick);
+        $m.on('input', '#pmPickSearch', schedulePickSearch);
+        $m.on('keydown', '#pmPickSearch', onPickKey);
+        $m.on('click', '#pmPickBody tr[data-i]', function () {
+            pickChoose(pickItems[parseInt(this.getAttribute('data-i'), 10)]);
+        });
 
         $(document).on('keydown', function (e) {
             if (e.key !== 'Escape' || $m.hasClass('bctk-hidden')) { return; }
-            if (!$('#pmPdf').hasClass('bctk-hidden')) { closePdf(); }
+            if (!$('#pmPick').hasClass('bctk-hidden')) { closePick(); }
+            else if (!$('#pmPdf').hasClass('bctk-hidden')) { closePdf(); }
             else if (editing) { cancelEdit(); }
             else { close(); }
         });
@@ -241,7 +272,7 @@
         if (canLines && typeof opts.onSaveLines === 'function') {
             if (editing) {
                 acts.push('<span class="pm-actions__sep"></span>');
-                acts.push('<button type="button" class="bctk-btn" id="pmEditAdd">+ Thêm dòng</button>');
+                acts.push('<button type="button" class="bctk-btn" id="pmEditAdd">+ Thêm sản phẩm</button>');
                 acts.push('<button type="button" class="bctk-btn bctk-btn--primary" id="pmEditSave">💾 Lưu</button>');
                 acts.push('<button type="button" class="bctk-btn" id="pmEditCancel">Huỷ</button>');
             } else {
@@ -339,8 +370,9 @@
             }
             return '<tr data-i="' + i + '">'
                 + '<td><button type="button" class="pm-line__del" data-i="' + i + '" title="Xoá dòng">✕</button> ' + (i + 1) + '</td>'
-                + '<td>' + inp('ma_hang', ln.ma_hang) + '</td>'
-                // Tên hàng CHỈ HIỂN THỊ — lấy theo mã hàng trong catalog, không gõ tay
+                // Mã hàng + Tên hàng CHỈ HIỂN THỊ — bấm để chọn từ danh mục (không gõ tay)
+                + '<td class="pm-ro pm-pick-cell" data-i="' + i + '" title="Bấm để chọn sản phẩm khác">'
+                    + (ln.ma_hang ? esc(ln.ma_hang) : '<span class="pm-pick-cell__ph">🔍 chọn…</span>') + '</td>'
                 + '<td class="pm-ro" title="' + esc(ln.ten || '') + '">' + esc(ln.ten || '—') + '</td>'
                 + '<td>' + esc(ln.kho || current.ma_shop || '') + '</td>'
                 + '<td>' + dvtCell() + '</td>'
@@ -358,7 +390,7 @@
                 + '<td>' + inp('ghi_chu', ln.ghi_chu) + '</td>'
                 + '</tr>';
         }).join('');
-        $('#pmLinesBody').html(rows || '<tr><td colspan="16" class="pm-lines__empty">Bấm "+ Thêm dòng".</td></tr>');
+        $('#pmLinesBody').html(rows || '<tr><td colspan="16" class="pm-lines__empty">Bấm "+ Thêm sản phẩm".</td></tr>');
         renderEditFoot();
     }
 
@@ -517,7 +549,7 @@
         renderToolbar(current);
         renderLines(current);
         renderFoot(current);
-        $('#pmActionMsg').text('Thuế suất & ĐVT theo cấu hình mã hàng (bảng giá website hiện tại). Gõ Mã hàng / Tên hàng để chọn sản phẩm.');
+        $('#pmActionMsg').text('Thuế suất & ĐVT theo cấu hình mã hàng (bảng giá website hiện tại). Bấm "+ Thêm sản phẩm" hoặc ô Mã hàng để chọn từ danh mục.');
         setTimeout(function () { $('#pmLinesBody .pm-line__in[data-col="sl"]').first().focus(); }, 30);
 
         // Nạp cấu hình ĐVT cho các mã hàng đang có → ĐVT thành ô chọn
@@ -563,23 +595,12 @@
     }
 
     function cancelEdit() {
-        acHide();
+        closePick();
         editing = false;
         editLines = [];
         renderToolbar(current);
         renderLines(current);
         renderFoot(current);
-    }
-
-    function addLine() {
-        editLines.push({
-            item_id: 0, _del: false, ma_hang: '', ten: '', dvt: '', kho: current.ma_shop || '',
-            sl: 1, ratio: 1, don_gia: 0, ck: 0, thue_pct: '', so_lo: '', exp: '', ghi_chu: '', units: []
-        });
-        renderLines(current);
-        setTimeout(function () {
-            $('#pmLinesBody tr[data-i="' + (editLines.length - 1) + '"] .pm-line__in[data-col="ma_hang"]').focus();
-        }, 20);
     }
 
     function delLine(i) {
@@ -621,32 +642,19 @@
 
     function onLineKey(e) {
         var k = e.key;
+        if (k !== 'ArrowDown' && k !== 'ArrowUp' && k !== 'Enter') { return; }
         var $in = $(e.target);
         var col = $in.data('col');
         var i = parseInt($in.data('i'), 10);
-
-        // Đang mở gợi ý sản phẩm ở ô Mã hàng / Tên hàng → phím điều hướng gợi ý
-        if (!$('#pmAc').hasClass('bctk-hidden') && col === 'ma_hang') {
-            if (k === 'ArrowDown') { e.preventDefault(); acMove(1); return; }
-            if (k === 'ArrowUp') { e.preventDefault(); acMove(-1); return; }
-            if (k === 'Enter') {
-                e.preventDefault();
-                if (acIdx >= 0 && acItems[acIdx]) { acPick(acItems[acIdx]); }
-                return;
-            }
-            if (k === 'Escape') { acHide(); return; }
-        }
-
-        if (k !== 'ArrowDown' && k !== 'ArrowUp' && k !== 'Enter') { return; }
         e.preventDefault();
 
         if (k === 'ArrowUp') {
             focusCell(i - 1, col);
         } else {
-            // Enter / ArrowDown — cuối bảng thì thêm dòng mới
+            // Enter / ArrowDown — cuối bảng thì mở bộ chọn sản phẩm
             var visible = editLines.map(function (l, idx) { return l._del ? -1 : idx; }).filter(function (x) { return x >= 0; });
             var pos = visible.indexOf(i);
-            if (pos === visible.length - 1) { addLine(); return; }
+            if (pos === visible.length - 1) { openPick('add', -1); return; }
             focusCell(visible[pos + 1], col);
         }
     }
@@ -656,69 +664,93 @@
         if ($c.length) { $c.focus().select && $c.select(); }
     }
 
-    // ── gợi ý sản phẩm (truy vấn catalog global) ─────────────────────────
-    function onSearchInput(e) {
-        if (typeof opts.onSearchProduct !== 'function') { return; }
-        var $in = $(e.target);
-        var term = String($in.val() || '').trim();
-        acTarget = $in;
-        if (acTimer) { clearTimeout(acTimer); }
-        if (term.length < 2) { acHide(); return; }
-        acTimer = setTimeout(function () {
+    // ── BỘ CHỌN SẢN PHẨM (modal con) — thay cho gõ tay + gợi ý trong ô ──
+    //
+    // Bám cách "Thêm sản phẩm" ở màn tạo phiếu: mở lên, tìm, bấm để thêm. Đỡ
+    // nhầm vì Mã hàng / Tên hàng không còn gõ tay được.
+
+    function openPick(mode, rowIdx) {
+        if (typeof opts.onSearchProduct !== 'function') {
+            api.toast('error', 'Màn này chưa bật tìm sản phẩm.');
+            return;
+        }
+        pickMode = (mode === 'replace') ? 'replace' : 'add';
+        pickRow = (pickMode === 'replace') ? parseInt(rowIdx, 10) : -1;
+        pickItems = [];
+        pickIdx = -1;
+        pickAdded = 0;
+
+        $('#pmPickTitle').text(pickMode === 'replace' ? 'Đổi sản phẩm dòng ' + (pickRow + 1) : 'Thêm sản phẩm');
+        $('#pmPickCount').text('');
+        $('#pmPickBody').html('<tr><td colspan="5" class="pm-pick__empty">Gõ từ khoá để tìm…</td></tr>');
+        $('#pmPickDone').text(pickMode === 'replace' ? 'Đóng' : 'Xong');
+        $('#pmPick').removeClass('bctk-hidden');
+        var $s = $('#pmPickSearch').val('');
+        setTimeout(function () { $s.focus(); }, 20);
+    }
+
+    function closePick() {
+        if (pickTimer) { clearTimeout(pickTimer); pickTimer = null; }
+        $('#pmPick').addClass('bctk-hidden');
+        pickItems = [];
+        pickIdx = -1;
+    }
+
+    function schedulePickSearch() {
+        var term = String($('#pmPickSearch').val() || '').trim();
+        if (pickTimer) { clearTimeout(pickTimer); }
+        if (term.length < 2) {
+            $('#pmPickBody').html('<tr><td colspan="5" class="pm-pick__empty">Gõ ít nhất 2 ký tự…</td></tr>');
+            return;
+        }
+        pickTimer = setTimeout(function () {
             opts.onSearchProduct(term, function (items) {
-                if (acTarget && acTarget.is(':focus')) { acShow(items || [], acTarget); }
+                renderPickResults(items || []);
             });
         }, 220);
     }
 
-    function acShow(items, $in) {
-        acItems = items;
-        acIdx = -1;
-        if (!items.length) { acHide(); return; }
-
-        var $ac = $('#pmAc');
-        $ac.html(items.map(function (it, i) {
-            return '<div class="pm-ac__row" data-i="' + i + '">'
-                + '<span class="pm-ac__sku">' + esc(it.sku) + '</span>'
-                + '<span class="pm-ac__name">' + esc(it.name) + '</span>'
-                + '<span class="pm-ac__meta">' + esc(it.unit || '') + ' · '
-                + (it.is_kct ? 'KCT' : (it.tax != null ? it.tax + '%' : '?')) + ' · '
-                + fmt(it.price) + '</span>'
-                + '</div>';
+    function renderPickResults(items) {
+        pickItems = items;
+        pickIdx = items.length ? 0 : -1;
+        if (!items.length) {
+            $('#pmPickBody').html('<tr><td colspan="5" class="pm-pick__empty">Không tìm thấy sản phẩm.</td></tr>');
+            return;
+        }
+        $('#pmPickBody').html(items.map(function (it, i) {
+            return '<tr data-i="' + i + '"' + (i === pickIdx ? ' class="is-sel"' : '') + '>'
+                + '<td>' + esc(it.sku) + '</td>'
+                + '<td>' + esc(it.name) + '</td>'
+                + '<td>' + esc(it.unit || '—') + '</td>'
+                + '<td class="c-num">' + fmt(it.price) + '</td>'
+                + '<td>' + (it.is_kct ? 'KCT' : (it.tax != null ? it.tax + '%' : '?')) + '</td>'
+                + '</tr>';
         }).join(''));
-
-        var r = $in[0].getBoundingClientRect();
-        $ac.css({
-            top: (r.bottom + 2) + 'px',
-            left: r.left + 'px',
-            minWidth: Math.max(320, r.width) + 'px'
-        }).removeClass('bctk-hidden');
     }
 
-    function acMove(d) {
-        var n = acItems.length;
+    function pickMove(d) {
+        var n = pickItems.length;
         if (!n) { return; }
-        acIdx = (acIdx + d + n) % n;
-        $('#pmAc .pm-ac__row').removeClass('is-sel')
-            .eq(acIdx).addClass('is-sel')[0].scrollIntoView({ block: 'nearest' });
+        pickIdx = (pickIdx + d + n) % n;
+        $('#pmPickBody tr').removeClass('is-sel')
+            .eq(pickIdx).addClass('is-sel')[0].scrollIntoView({ block: 'nearest' });
     }
 
-    function acHide() {
-        $('#pmAc').addClass('bctk-hidden').empty();
-        acItems = [];
-        acIdx = -1;
+    function onPickKey(e) {
+        var k = e.key;
+        if (k === 'ArrowDown') { e.preventDefault(); pickMove(1); }
+        else if (k === 'ArrowUp') { e.preventDefault(); pickMove(-1); }
+        else if (k === 'Enter') {
+            e.preventDefault();
+            if (pickIdx >= 0 && pickItems[pickIdx]) { pickChoose(pickItems[pickIdx]); }
+        } else if (k === 'Escape') { e.preventDefault(); e.stopPropagation(); closePick(); }
     }
 
-    function acPick(it) {
-        if (!it || !acTarget) { return; }
-        var i = parseInt(acTarget.data('i'), 10);
-        var ln = editLines[i];
-        if (!ln) { return; }
+    /* Gán sản phẩm vào một dòng: SKU · tên · thuế · ĐVT/giá theo bảng giá */
+    function applyProductToLine(ln, it) {
         ln.ma_hang = it.sku;
         ln.ten = it.name;
         ln.thue_pct = it.is_kct ? 'KCT' : (it.tax != null ? it.tax : ln.thue_pct);
-
-        // ĐVT + giá theo cấu hình bảng giá (ĐVT ưu tiên); rơi về ĐVT/giá catalog
         var us = it.units || [];
         ln.units = us;
         if (us.length) {
@@ -731,9 +763,35 @@
             ln.ratio = 1;
             if (!num(ln.don_gia)) { ln.don_gia = it.price || 0; }
         }
-        acHide();
-        renderLines(current);
-        setTimeout(function () { focusCell(i, 'sl'); }, 20);
+    }
+
+    function pickChoose(it) {
+        if (!it) { return; }
+
+        if (pickMode === 'replace') {
+            var ln = editLines[pickRow];
+            if (!ln) { closePick(); return; }
+            applyProductToLine(ln, it);
+            closePick();
+            renderLines(current);
+            setTimeout(function () { focusCell(pickRow, 'sl'); }, 20);
+            return;
+        }
+
+        // mode 'add' — thêm một dòng mới, GIỮ modal mở để thêm tiếp
+        var line = {
+            item_id: 0, _del: false, ma_hang: '', ten: '', dvt: '', kho: current.ma_shop || '',
+            sl: 1, ratio: 1, don_gia: 0, ck: 0, thue_pct: '', so_lo: '', exp: '', ghi_chu: '', units: []
+        };
+        applyProductToLine(line, it);
+        editLines.push(line);
+        pickAdded++;
+        $('#pmPickCount').text('Đã thêm ' + pickAdded);
+        renderLines(current);   // cập nhật bảng nền
+        $('#pmPickSearch').val('').focus();
+        $('#pmPickBody').html('<tr><td colspan="5" class="pm-pick__empty">Gõ từ khoá để tìm tiếp…</td></tr>');
+        pickItems = [];
+        pickIdx = -1;
     }
 
     function saveEdit() {
@@ -842,7 +900,7 @@
     function close() {
         $('#pmModal').addClass('bctk-hidden').attr('aria-hidden', 'true');
         closePdf();
-        acHide();
+        closePick();
         editing = false;
         editLines = [];
         current = null;
