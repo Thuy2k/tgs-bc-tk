@@ -1543,6 +1543,28 @@ class TGS_BCTK_Report
         ]) . ',';
     }
 
+    /**
+     * Biểu thức lấy MST khách trong SELECT — an toàn với shop cũ.
+     *
+     * Cột `local_ledger_person_tax_code` được thêm sau; shop chưa migrate là
+     * KHÔNG có cột, SELECT thẳng thì vỡ cả câu ("Unknown column"). Kiểm tra một
+     * lần rồi cache theo tên bảng.
+     */
+    private static function person_taxcode_expr($person_table, $alias)
+    {
+        global $wpdb;
+        static $has = [];
+        if (!array_key_exists($person_table, $has)) {
+            $has[$person_table] = $wpdb->get_var($wpdb->prepare(
+                "SHOW COLUMNS FROM `{$person_table}` LIKE %s",
+                'local_ledger_person_tax_code'
+            )) === 'local_ledger_person_tax_code';
+        }
+        return $has[$person_table]
+            ? "COALESCE({$alias}.local_ledger_person_tax_code, '')"
+            : "''";
+    }
+
     /** Hậu tố mã bill Z — lấy từ tgs_pos nếu bật, mặc định 'Z' */
     public static function promo_suffix()
     {
@@ -1602,6 +1624,7 @@ class TGS_BCTK_Report
         }
 
         $buyer_sql = self::buyer_meta_selects('mt');
+        $mst_expr  = self::person_taxcode_expr($person_table, 'pe');
 
         /*
          * Bản ghi VAT mới nhất của mỗi phiếu. Bản ghi điều chỉnh KHÔNG gắn
@@ -1658,7 +1681,7 @@ class TGS_BCTK_Report
                 COALESCE(pe.local_ledger_person_phone, '')          AS kh_dt,
                 COALESCE(pe.local_ledger_person_address, '')        AS kh_dchi,
                 COALESCE(pe.local_ledger_person_email, '')          AS kh_email,
-                COALESCE(pe.local_ledger_person_tax_code, '')       AS kh_mst,
+                {$mst_expr}                                         AS kh_mst,
                 JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label')) AS httt,
                 {$buyer_sql}
                 {$vi_cols}
@@ -1808,6 +1831,7 @@ class TGS_BCTK_Report
         $to   = $date_to . ' 23:59:59';
 
         $buyer_sql = self::buyer_meta_selects('mt');
+        $mst_expr  = self::person_taxcode_expr($person_table, 'pe');
 
         $vi_join = $has_vi
             ? "LEFT JOIN {$vi_table} vi ON vi.local_viettel_invoice_id = q.adjustment_invoice_record_id"
@@ -1848,7 +1872,7 @@ class TGS_BCTK_Report
                 COALESCE(pe.local_ledger_person_phone, '')     AS kh_dt,
                 COALESCE(pe.local_ledger_person_address, '')   AS kh_dchi,
                 COALESCE(pe.local_ledger_person_email, '')     AS kh_email,
-                COALESCE(pe.local_ledger_person_tax_code, '')  AS kh_mst,
+                {$mst_expr}                                    AS kh_mst,
                 JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label')) AS httt,
                 {$buyer_sql}
                 {$vi_cols}
