@@ -597,6 +597,11 @@ class TGS_BCTK_Ajax
             $tong   = round((float) $r['tong_tien']);
             $da_tra = round((float) $r['da_tra']);
 
+            // Kênh/Lý do xuất: LẤY ĐỘNG nếu phiếu bán có ghi, không thì mới lấy
+            // cố định như trước — chỉ áp dụng cho dòng bán, không áp cho hoàn.
+            $kenh_dyn  = $is_return ? '' : trim((string) ($r['kenh_dyn'] ?? ''));
+            $ly_do_dyn = $is_return ? '' : trim((string) ($r['ly_do_dyn'] ?? ''));
+
             $rows[] = [
                 'blog_id' => $blog_id,
                 'sale_id' => (int) ($r['sale_id'] ?? 0),
@@ -604,7 +609,7 @@ class TGS_BCTK_Ajax
                 'no_zone' => $no_zone,
                 'pbh'     => (string) $r['pbh'],
                 'ngay'    => (string) $r['ngay'],
-                'ly_do'   => $is_return ? 'NTH1' : 'XBA',
+                'ly_do'   => $is_return ? 'NTH1' : ($ly_do_dyn !== '' ? $ly_do_dyn : 'XBA'),
                 'tra_lai' => $is_return,
                 'kh_ma'   => (string) $r['kh_ma'],
                 'kh_ten'  => (string) $r['kh_ten'],
@@ -626,7 +631,7 @@ class TGS_BCTK_Ajax
                 /* Còn nợ = tổng tiền phiếu trừ phần đã thu/chi đã duyệt */
                 'con_no'  => $tong - $da_tra,
                 'ghi_chu' => self::extract_order_note($r['ghi_chu']),
-                'kenh'    => 'Gần shop',
+                'kenh'    => $kenh_dyn !== '' ? $kenh_dyn : 'Gần shop',
             ];
         }
 
@@ -674,6 +679,9 @@ class TGS_BCTK_Ajax
             $g       = $group[$r['sku']] ?? [];
 
             $is_return = ((string) $r['it'] === '3');
+            // Kênh/Lý do xuất động — xem chú thích ở build_sales_sum_rows().
+            $kenh_dyn  = $is_return ? '' : trim((string) ($r['kenh_dyn'] ?? ''));
+            $ly_do_dyn = $is_return ? '' : trim((string) ($r['ly_do_dyn'] ?? ''));
 
             /*
              * ─── TIỀN CỦA DÒNG: ĐỂ TGS_Money TÍNH, KHÔNG TỰ NHÂN CHIA ───────
@@ -772,8 +780,9 @@ class TGS_BCTK_Ajax
                 'nhom'     => (string) ($g['nhom'] ?? ''),
 
                 'pbh'      => (string) $r['pbh'],
-                /* Mã lý do theo phần mềm cũ: bán = XBA, trả lại = NTH1 */
-                'ly_do'    => $is_return ? 'NTH1' : 'XBA',
+                /* Mã lý do theo phần mềm cũ: bán = XBA, trả lại = NTH1 — lấy động
+                   từ phiếu bán nếu có, không thì mới về mã cố định */
+                'ly_do'    => $is_return ? 'NTH1' : ($ly_do_dyn !== '' ? $ly_do_dyn : 'XBA'),
                 'tra_lai'  => $is_return,
 
                 'qty'      => $qty,
@@ -821,7 +830,7 @@ class TGS_BCTK_Ajax
                 'httt'     => (string) ($r['httt'] ?? ''),
                 'so_lo'    => (string) $r['so_lo'],
                 'exp'      => (string) ($r['exp_date'] ?? ''),
-                'kenh'     => 'Gần shop',
+                'kenh'     => $kenh_dyn !== '' ? $kenh_dyn : 'Gần shop',
             ];
         }
 

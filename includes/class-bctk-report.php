@@ -916,7 +916,11 @@ class TGS_BCTK_Report
                 COALESCE(pe.local_ledger_person_name, '')  AS kh_ten,
                 COALESCE(pe.local_ledger_person_phone, '') AS kh_dt,
                 COALESCE(pn.local_product_unit, '')        AS dvcb_local,
-                JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label')) AS httt
+                JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label')) AS httt,
+                /* Kênh (nguồn bán) và Lý do xuất động — do màn bán hàng POS ghi,
+                   xem TGS_POS_Sale_Source / TGS_POS_Export_Reason bên tgs_pos. */
+                JSON_UNQUOTE(JSON_EXTRACT(p.local_ledger_advance_meta, '$.pos_sale_source')) AS kenh_dyn,
+                JSON_UNQUOTE(JSON_EXTRACT(p.local_ledger_advance_meta, '$.export_reason.code')) AS ly_do_dyn
             FROM {$item_table} li
             JOIN {$ledger_table} l ON l.local_ledger_id = li.local_ledger_id
             JOIN {$ledger_table} p ON p.local_ledger_id = l.local_ledger_parent_id
@@ -1056,6 +1060,12 @@ class TGS_BCTK_Report
                 COALESCE(pe.local_ledger_person_phone, '') AS kh_dt,
                 COALESCE(d.local_ledger_note, '')          AS ghi_chu,
                 JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label')) AS httt,
+                /* Kênh/Lý do xuất động — chỉ có ý nghĩa với phiếu BÁN (type 10);
+                   phiếu hoàn (type 11) không có nguồn bán riêng, JSON_EXTRACT
+                   trên phiếu hoàn ra NULL là đúng, build_sales_sum_rows() giữ
+                   nguyên giá trị cố định cho trường hợp đó. */
+                JSON_UNQUOTE(JSON_EXTRACT(d.local_ledger_advance_meta, '$.pos_sale_source')) AS kenh_dyn,
+                JSON_UNQUOTE(JSON_EXTRACT(d.local_ledger_advance_meta, '$.export_reason.code')) AS ly_do_dyn,
 
                 /* Một mã kho đại diện, lấy từ dòng hàng của chính phiếu hoặc
                    phiếu con — phiếu chỉ thuộc về một điểm tồn */
