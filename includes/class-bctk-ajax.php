@@ -2268,6 +2268,34 @@ class TGS_BCTK_Ajax
             }
 
             /*
+             * ─── NHẬT KÝ (plugin tgs_audit_log) ───────────────────────────
+             * Chụp trạng thái dòng hàng + tổng phiếu TRƯỚC khi sửa. Chỉ chạy
+             * khi có plugin nghe hook — không thì bỏ, khỏi tốn query.
+             */
+            $audit_on = has_action('tgs_bctk_vat_lines_saved');
+            $audit_snap_sql = "SELECT local_ledger_item_id AS id, local_product_sku AS sku,
+                        local_ledger_item_product_name_cache AS ten,
+                        local_ledger_item_unit_name AS dvt,
+                        local_ledger_item_unit_quantity AS sl,
+                        quantity AS qty, price,
+                        local_ledger_item_discount_amount AS ck,
+                        local_ledger_item_tax_percent AS thue_pct,
+                        local_ledger_item_tax_amount AS thue,
+                        lot_code AS so_lo, exp_date AS exp
+                   FROM {$LI}
+                  WHERE local_ledger_id = %d AND (is_deleted = 0 OR is_deleted IS NULL)
+                  ORDER BY local_ledger_item_id ASC";
+            $audit_before = $audit_on
+                ? ($wpdb->get_results($wpdb->prepare($audit_snap_sql, $export_id), ARRAY_A) ?: [])
+                : [];
+            $audit_grand_before = $audit_on
+                ? (float) $wpdb->get_var($wpdb->prepare(
+                    "SELECT local_ledger_total_amount FROM {$L} WHERE local_ledger_id = %d",
+                    $export_id
+                ))
+                : 0.0;
+
+            /*
              * Catalog GLOBAL cho MỌI mã hàng trong payload:
              *   - Thuế suất dòng mới lấy từ đây (dòng cũ giữ số đã lưu — xem dưới).
              *   - TÊN HÀNG: cột local_ledger_item_product_name_cache LUÔN lấy theo
@@ -2548,6 +2576,29 @@ class TGS_BCTK_Ajax
                     . 'đ. Kiểm tra lại phiếu thu / công nợ.';
             }
 
+            /*
+             * ─── NHẬT KÝ (plugin tgs_audit_log) ───────────────────────────
+             * Chụp trạng thái SAU rồi phát hook — vẫn đang ở ngữ cảnh site
+             * shop (chưa restore_current_blog). Plugin nghe hook tự lo so sánh
+             * trước↔sau, ghi file JSONL và bắn Zalo ở shutdown.
+             */
+            if (!empty($audit_on)) {
+                $audit_after = $wpdb->get_results($wpdb->prepare($audit_snap_sql, $export_id), ARRAY_A) ?: [];
+                do_action('tgs_bctk_vat_lines_saved', [
+                    'blog_id'      => $blog_id,
+                    'sale_id'      => $sale_id,
+                    'report_blog'  => (int) $report_blog,
+                    'sale_code'    => (string) ($ctx['sale']['local_ledger_code'] ?? ''),
+                    'export_id'    => $export_id,
+                    'before'       => $audit_before,
+                    'after'        => $audit_after,
+                    'grand_before' => (float) $audit_grand_before,
+                    'grand_total'  => (float) $grand,
+                    'warning'      => $warning,
+                    'live_count'   => count($live),
+                ]);
+            }
+
             $row = self::vat_row_for_sale($blog_id, $sale_id);
 
             if ($switched) { restore_current_blog(); $switched = false; }
@@ -2706,12 +2757,17 @@ class TGS_BCTK_Ajax
         $sale_id = (int) ($_POST['sale_id'] ?? 0);
         $note    = trim(sanitize_textarea_field((string) wp_unslash($_POST['note'] ?? '')));
 
+        // Site đang chạy hệ quản trị — chốt TRƯỚC khi vat_edit_context switch_to_blog
+        $report_blog = get_current_blog_id();
+
         $switched = false;
         $ctx = self::vat_edit_context($blog_id, $sale_id, $switched);
 
         try {
             global $wpdb;
             $L = $wpdb->prefix . 'local_ledger';
+
+            $note_before = (string) ($ctx['sale']['local_ledger_note'] ?? '');
 
             /*
              * Lưu THẲNG chữ kế toán nhập — giống luồng POS mới, không bọc
@@ -2720,6 +2776,18 @@ class TGS_BCTK_Ajax
              */
             $wpdb->update($L, ['local_ledger_note' => $note, 'updated_at' => current_time('mysql')],
                 ['local_ledger_id' => $sale_id]);
+
+            // ─── NHẬT KÝ (plugin tgs_audit_log) ───
+            if (has_action('tgs_bctk_vat_note_saved')) {
+                do_action('tgs_bctk_vat_note_saved', [
+                    'blog_id'     => $blog_id,
+                    'sale_id'     => $sale_id,
+                    'report_blog' => (int) $report_blog,
+                    'sale_code'   => (string) ($ctx['sale']['local_ledger_code'] ?? ''),
+                    'before'      => $note_before,
+                    'after'       => $note,
+                ]);
+            }
 
             if ($switched) { restore_current_blog(); $switched = false; }
             wp_send_json_success(['ghi_chu' => $note, 'message' => 'Đã lưu ghi chú.']);
