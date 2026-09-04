@@ -216,6 +216,46 @@
 
         $('body').append(html);
 
+        /*
+         * ─── CẢNH BÁO TRƯỚC "SỬA DÒNG HÀNG" ──────────────────────────────────
+         *
+         * Từ khi BTsoft lên chính (xem docs go-live), kế toán KHÔNG còn được
+         * sửa dòng hàng của phiếu xuất bán trên phần mềm nữa — việc đó làm bên
+         * BTsoft. Chỉ còn "Tách / chuyển bill Z" (tách sản phẩm không tiền ra
+         * khỏi phiếu để hoãn gửi thuế) là còn dùng.
+         *
+         * KHÔNG khoá nút: giữ nguyên chức năng sửa (phòng khi sau này vẫn cần),
+         * chỉ chặn một nhịp cảnh báo đỏ trước khi vào sửa — bấm "Vẫn sửa dòng
+         * hàng" là vào y như cũ.
+         */
+        var warnHtml =
+        '<div class="pm-warn bctk-hidden" id="pmEditWarn" aria-hidden="true">'
+        + '<div class="pm-warn__overlay" data-pm-warn-close></div>'
+        + '<div class="pm-warn__panel" role="alertdialog" aria-modal="true" aria-labelledby="pmEditWarnTitle">'
+        +   '<div class="pm-warn__head">'
+        +     '<strong id="pmEditWarnTitle">⚠ Không còn hỗ trợ sửa dòng hàng</strong>'
+        +   '</div>'
+        +   '<div class="pm-warn__body">'
+        +     'Toàn hệ thống đã chuyển sang <b>BTsoft</b> — <b>sửa dòng hàng của phiếu xuất bán không còn được hỗ trợ</b> nữa,'
+        +     ' ở màn này lẫn mọi màn khác.'
+        +     '<br><br>'
+        +     'Ở đây chỉ còn dùng để <b>tách sản phẩm không có tiền</b> (hàng khuyến mãi, mã Z) ra khỏi phiếu —'
+        +     ' để phiếu đó <b>hoãn gửi thuế</b> khi CHƯA gửi hoá đơn.'
+        +     '<br><br>'
+        +     'Nút sửa dòng hàng vẫn giữ lại đây (phòng khi cần), nhưng không thuộc quy trình hiện tại.'
+        +   '</div>'
+        +   '<div class="pm-warn__pw">'
+        +     '<label for="pmEditWarnPw">Vẫn muốn sửa? Nhập mật khẩu để tiếp tục</label>'
+        +     '<input type="password" id="pmEditWarnPw" autocomplete="off" placeholder="Mật khẩu">'
+        +     '<div class="pm-warn__pwerr bctk-hidden" id="pmEditWarnPwErr">Sai mật khẩu.</div>'
+        +   '</div>'
+        +   '<div class="pm-warn__foot">'
+        +     '<button type="button" class="bctk-btn" data-pm-warn-close>Đóng</button>'
+        +     '<button type="button" class="bctk-btn bctk-btn--danger" id="pmEditWarnProceed">Vẫn sửa dòng hàng</button>'
+        +   '</div>'
+        + '</div></div>';
+        $('body').append(warnHtml);
+
         var $m = $('#pmModal');
         $m.on('click', '[data-pm-close]', function () { if (!editing) { close(); } else { cancelEdit(); } });
         $m.on('click', '[data-pm-pdf-close]', closePdf);
@@ -224,7 +264,13 @@
             var a = (opts.actions || []).filter(function (x) { return x.id === id; })[0];
             if (a && typeof a.run === 'function') { a.run(current, api); }
         });
-        $m.on('click', '#pmEditStart', startEdit);
+        $m.on('click', '#pmEditStart', openEditWarn);
+        $(document).on('click', '#pmEditWarn [data-pm-warn-close]', closeEditWarn);
+        $(document).on('click', '#pmEditWarnProceed', tryProceedEditWarn);
+        $(document).on('keydown', '#pmEditWarnPw', function (e) {
+            $('#pmEditWarnPwErr').addClass('bctk-hidden');
+            if (e.key === 'Enter') { e.preventDefault(); tryProceedEditWarn(); }
+        });
         $m.on('click', '#pmEditSave', saveEdit);
         $m.on('click', '#pmEditCancel', cancelEdit);
         $m.on('click', '#pmEditAdd', function () { openPick('add', -1); });
@@ -246,12 +292,37 @@
         });
 
         $(document).on('keydown', function (e) {
-            if (e.key !== 'Escape' || $m.hasClass('bctk-hidden')) { return; }
+            if (e.key !== 'Escape') { return; }
+            if (!$('#pmEditWarn').hasClass('bctk-hidden')) { closeEditWarn(); return; }
+            if ($m.hasClass('bctk-hidden')) { return; }
             if (!$('#pmPick').hasClass('bctk-hidden')) { closePick(); }
             else if (!$('#pmPdf').hasClass('bctk-hidden')) { closePdf(); }
             else if (editing) { cancelEdit(); }
             else { close(); }
         });
+    }
+
+    /* Cảnh báo trước khi vào sửa dòng hàng — xem chú thích ở build(). */
+    // Chỉ để cản bấm nhầm — KHÔNG phải hàng rào bảo mật (mật khẩu nằm ngay
+    // trong JS gửi về trình duyệt, ai xem mã nguồn cũng đọc được).
+    var EDIT_WARN_PASSWORD = 'Thuy!@#';
+
+    function openEditWarn() {
+        $('#pmEditWarnPw').val('');
+        $('#pmEditWarnPwErr').addClass('bctk-hidden');
+        $('#pmEditWarn').removeClass('bctk-hidden').attr('aria-hidden', 'false');
+        setTimeout(function () { $('#pmEditWarnPw').trigger('focus'); }, 30);
+    }
+    function closeEditWarn() { $('#pmEditWarn').addClass('bctk-hidden').attr('aria-hidden', 'true'); }
+    function tryProceedEditWarn() {
+        var pw = String($('#pmEditWarnPw').val() || '');
+        if (pw !== EDIT_WARN_PASSWORD) {
+            $('#pmEditWarnPwErr').removeClass('bctk-hidden');
+            $('#pmEditWarnPw').trigger('select');
+            return;
+        }
+        closeEditWarn();
+        startEdit();
     }
 
     // ── render: đầu / chứng từ ─────────────────────────────────────────────
