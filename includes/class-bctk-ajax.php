@@ -47,10 +47,11 @@ class TGS_BCTK_Ajax
             return 0.0;
         }
 
-        $gia = round($tien_goc / $qty);
+        // Báo cáo quản trị: 4 số thập phân, không ép số nguyên.
+        $gia = round($tien_goc / $qty, 4);
 
         if ($gia * $qty < $thanh_tien) {
-            $gia = ceil($thanh_tien / $qty);
+            $gia = ceil($thanh_tien / $qty * 10000) / 10000;
         }
 
         return (float) $gia;
@@ -592,10 +593,10 @@ class TGS_BCTK_Ajax
             $no_zone   = ($is_warehouse && $zone === '');
             $is_return = ((string) $r['lt'] === '11');
 
-            /* Làm tròn về đồng cho khớp màn Báo cáo bán hàng và bill POS —
-               nhân viên đối chiếu tiền mặt không phải nhìn số lẻ. */
-            $tong   = round((float) $r['tong_tien']);
-            $da_tra = round((float) $r['da_tra']);
+            /* Báo cáo quản trị hiện tối đa 4 số thập phân, không làm tròn về
+               đồng chẵn — xem mo-hinh-tien-va-bang-local-ledger-item.md. */
+            $tong   = round((float) $r['tong_tien'], 4);
+            $da_tra = round((float) $r['da_tra'], 4);
 
             // Kênh/Lý do xuất: LẤY ĐỘNG nếu phiếu bán có ghi, không thì mới lấy
             // cố định như trước — chỉ áp dụng cho dòng bán, không áp cho hoàn.
@@ -717,30 +718,26 @@ class TGS_BCTK_Ajax
              * trùng nhau (đã đối chiếu toàn bộ dữ liệu), nếu sau này lệch thì
              * báo cáo phải theo bản đã nộp.
              */
-            $thue = round((float) $r['thue']);
+            $thue = round((float) $r['thue'], 4);
 
             /*
-             * ─── LÀM TRÒN VỀ ĐỒNG, THEO ĐÚNG CÁCH POS ĐANG LÀM ──────────────
+             * ─── BÁO CÁO QUẢN TRỊ: 4 SỐ THẬP PHÂN, KHÔNG LÀM TRÒN VỀ ĐỒNG ────
              *
-             * DB lưu 3 số lẻ để không mất chính xác, nhưng BÁO CÁO thì phải ra
-             * số chẵn: nhân viên đối chiếu tiền mặt hằng ngày, thấy 429.999,67
-             * là tưởng lệch quỹ, trong khi thực thu đúng 430.000.
+             * DB lưu 3 số lẻ để không mất chính xác; báo cáo quản trị hiện tối
+             * đa 4 số thập phân (không ép về đồng chẵn) — xem
+             * mo-hinh-tien-va-bang-local-ledger-item.md. Số THẬT khách trả và
+             * số gửi cơ quan thuế vẫn tròn đồng/2 số như cũ ở nơi tương ứng
+             * (POS lúc bán, hoá đơn điện tử) — đây chỉ là cột hiển thị.
              *
-             * Thứ tự làm tròn quan trọng, làm sai là dòng không cộng được:
-             *
+             * Thứ tự làm tròn vẫn giữ để dòng cộng khớp:
              *   1. Thành tiền  — chốt trước, vì đây là tiền THẬT khách trả
              *   2. Đơn giá     — làm tròn từ tiền hàng gốc
              *   3. Chiết khấu  — SUY RA sau cùng = đơn giá × SL − thành tiền
-             *
-             * Nếu làm tròn cả ba độc lập thì lẻ mỗi thứ một ít rồi lệch nhau:
-             * 450.000 × 1 − 20.001 = 429.999, trong khi thành tiền là 430.000.
-             * Dồn phần lẻ vào chiết khấu thì dòng luôn cộng khít — đây đúng là
-             * cách TGS_POS_Ajax_Order dựng số để in bill.
              */
-            $thanh_tien = round($m['tien_hang_sau_ck'] + $thue);
+            $thanh_tien = round($m['tien_hang_sau_ck'] + $thue, 4);
 
             /* Tiền hàng GỐC (trước CK, sau thuế) — mốc để suy ra đơn giá */
-            $goc = round($m['tien_hang_truoc_ck'] * (1 + $thue_pct / 100));
+            $goc = round($m['tien_hang_truoc_ck'] * (1 + $thue_pct / 100), 4);
 
             $gia_dvcb = self::don_gia_lam_tron($goc, $qty, $thanh_tien);
 
@@ -759,7 +756,7 @@ class TGS_BCTK_Ajax
              * "Đơn giá" là 38.000/hộp, còn cột này là 152.000/vỉ.
              */
             $ratio    = max(1.0, (float) $r['ratio']);
-            $gia_dvt  = round($gia_dvcb * $ratio);
+            $gia_dvt  = round($gia_dvcb * $ratio, 4);
 
             $rows[] = [
                 'blog_id'  => $blog_id,
