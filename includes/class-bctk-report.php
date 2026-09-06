@@ -840,6 +840,17 @@ class TGS_BCTK_Report
             $type_sql = 'li.local_ledger_item_type = 2';
         }
 
+        /*
+         * NGÀY của dòng — KHÔNG dùng chung p.created_at cho cả hai:
+         *   • Dòng BÁN  (item_type 2): l = phiếu xuất, p = phiếu bán gốc → p.created_at.
+         *   • Dòng TRẢ  (item_type 3): l = phiếu HOÀN (type 11) tạo đúng lúc bấm
+         *     hoàn, p = phiếu bán gốc (thường KHÁC ngày). Phải lấy l.created_at,
+         *     nếu không thì bán hôm nay hoàn hôm sau sẽ bị lọc/hiện theo NGÀY BÁN —
+         *     lệch với sổ kho (cột "Nhập lại" đã tính theo li.created_at) và với
+         *     màn Tổng hợp (site_sales_summary_rows lọc theo d.created_at type 11).
+         */
+        $ngay_expr = "CASE WHEN li.local_ledger_item_type = 3 THEN l.created_at ELSE p.created_at END";
+
         $where = [
             $type_sql,
             "p.local_ledger_type = {$SALE}",
@@ -850,7 +861,7 @@ class TGS_BCTK_Report
         ];
 
         $params  = [];
-        $where[] = 'p.created_at BETWEEN %s AND %s';
+        $where[] = "({$ngay_expr}) BETWEEN %s AND %s";
         $params[] = $date_from . ' 00:00:00';
         $params[] = $date_to   . ' 23:59:59';
 
@@ -892,7 +903,7 @@ class TGS_BCTK_Report
                 li.local_product_sku                       AS sku,
                 p.local_ledger_code                        AS pbh,
                 p.local_ledger_id                          AS sale_id,
-                p.created_at                               AS ngay,
+                {$ngay_expr}                               AS ngay,
                 li.quantity                                AS qty,
                 /*
                  * price là giá TRƯỚC THUẾ, tính theo ĐƠN VỊ NHỎ NHẤT.
@@ -929,7 +940,7 @@ class TGS_BCTK_Report
             LEFT JOIN {$pname_table}  pn ON pn.local_product_name_id  = li.local_product_name_id
             LEFT JOIN {$wpdb->users}   u ON u.ID = li.user_id
             WHERE {$where_sql}
-            ORDER BY p.created_at DESC, p.local_ledger_code
+            ORDER BY ngay DESC, p.local_ledger_code
         ";
 
         $rows = $wpdb->get_results($wpdb->prepare($sql, ...$params), ARRAY_A);
