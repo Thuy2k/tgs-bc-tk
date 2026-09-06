@@ -204,12 +204,6 @@
             };
         }
 
-        function soon(name) {
-            return function (r, api) {
-                api.toast('info', name + ' — đang phát triển, sẽ chốt luồng ở bước sau.');
-            };
-        }
-
         function fetchPdf(r, api) {
             api.busy(true);
             api.toast('info', 'Đang lấy PDF từ Viettel…');
@@ -278,11 +272,38 @@
                 run: openPosOrders('Đã mở "Lịch sử đơn hàng" để lập phiếu điều chỉnh giảm cho đơn ')
             },
             {
-                id: 'replace', label: 'Thay thế',
+                // ĐÃ phát hành mà SAI thông tin bên mua (MST, tên đơn vị…): sửa
+                // buyerInfo → phát hành hoá đơn THAY THẾ toàn bộ qua Viettel
+                // (adjustmentType 3) + tự gửi CQT. Không đổi hàng hoá / tiền.
+                id: 'replace', label: 'Lập HĐ thay thế',
                 when: function (r) { return !isAdjust && issued(r); },
-                run: soon('Thay thế hoá đơn')
+                run: function (r, api) { api.openReplForm(); }
             }
         ];
+
+        // ── Phát hành hoá đơn thay thế ───────────────────────────────────────
+        function issueReplacement(r, data, api) {
+            var fd = new FormData();
+            fd.append('action', 'tgs_bctk_vat_issue_replacement');
+            fd.append('nonce', (window.TGS_BCTK && window.TGS_BCTK.nonce) || '');
+            fd.append('blog_id', String(r.blog_id || ''));
+            fd.append('sale_id', String(r.sale_id || ''));
+            fd.append('buyer', JSON.stringify(data.buyer || {}));
+            fd.append('reason', String(data.reason || ''));
+
+            fetch(CFG.ajaxUrl, { method: 'POST', body: fd, credentials: 'same-origin' })
+                .then(function (res) { return res.json(); })
+                .then(function (out) {
+                    if (!out || !out.success) {
+                        var m = (out && out.data && out.data.message) || 'Không phát hành được hoá đơn thay thế.';
+                        throw new Error(m);
+                    }
+                    api.closeReplForm();
+                    if (out.data && out.data.row) { api.applyRow(out.data.row); }
+                    api.toast('info', (out.data && out.data.message) || 'Đã phát hành hoá đơn thay thế và gửi CQT.');
+                })
+                .catch(function (err) { api.replError(err.message || 'Không phát hành được.'); });
+        }
 
         // ── Lưu dòng hàng đã sửa ──────────────────────────────────────────
         function saveLines(r, lines, api) {
@@ -368,6 +389,7 @@
                 actor: { id: Number(CFG.actorId || 0), name: String(CFG.actorName || '') },
                 onSaveLines: saveLines,
                 onSaveNote: saveNote,
+                onIssueReplacement: issueReplacement,
                 onSearchProduct: searchProduct,
                 onLoadUnits: loadUnits,
                 /* Sau khi lưu: chạy lại tìm kiếm để bảng khớp với dữ liệu mới */

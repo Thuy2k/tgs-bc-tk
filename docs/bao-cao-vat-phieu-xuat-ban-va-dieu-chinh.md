@@ -187,7 +187,7 @@ Kế toán thao tác xong bấm "Tìm kiếm" lại để cập nhật báo cáo
 | Chưa phát hành (không phải Z) | **Tách / chuyển bill Z ↗**, **Gửi hoá đơn thuế ↗** | mở màn DS Gửi Thuế của shop |
 | Gửi lỗi | **Gửi lại ↗** | mở màn DS Gửi Thuế của shop |
 | **Chưa** phát hành | **Hoàn hàng ↗** | mở màn "Lịch sử đơn hàng" của shop, bung sẵn đúng đơn |
-| **Đã** phát hành | **Xem PDF**, **Điều chỉnh (hoàn hàng) ↗**, **Thay thế** | PDF chạy thật; "Điều chỉnh" mở màn đơn hàng của shop (hoàn ở đó = sinh phiếu điều chỉnh giảm); "Thay thế" chờ chốt luồng |
+| **Đã** phát hành | **Xem PDF**, **Điều chỉnh (hoàn hàng) ↗**, **Lập HĐ thay thế** | PDF chạy thật; "Điều chỉnh" mở màn đơn hàng của shop (hoàn ở đó = sinh phiếu điều chỉnh giảm); "Lập HĐ thay thế" → §6.2c |
 
 **"Hoàn hàng ↗" / "Điều chỉnh (hoàn hàng) ↗"** — cùng một hành vi: mở
 `get_home_url($blog_id, '/pos-orders/')` (payload `pos_orders_url`) kèm
@@ -326,6 +326,49 @@ phẩm" ở màn tạo phiếu, đỡ nhầm:
   "KCT".
 - Client gửi `thue_pct` lên chỉ để hiện tạm; `vat_save_lines` **luôn ghi đè**
   bằng số ở trên.
+
+### 6.2c LẬP HOÁ ĐƠN THAY THẾ QUA VIETTEL (adjustmentType = 3)
+
+Hoá đơn **đã phát hành + gửi CQT** mà **sai thông tin bên mua** (MST, tên đơn
+vị, địa chỉ…). Nút **"Lập HĐ thay thế"** (hiện khi `issued(r)`, không phải màn
+điều chỉnh) mở form sửa `buyerInfo` (Tên, Tên pháp lý, MST, Địa chỉ, ĐT, Email)
++ Lý do → xác nhận → phát hành **hoá đơn thay thế TOÀN BỘ** cho hoá đơn gốc và
+**tự gửi CQT**. Hàng hoá / tiền / thuế GIỮ NGUYÊN của hoá đơn gốc.
+
+**Luồng:** `bctk-vat-report.js` `issueReplacement()` → `tgs_bctk_vat_issue_replacement`
+(`class-bctk-ajax.php`) → `switch_to_blog($blog_id)` →
+`TGS_Viettel_Invoice_Replacement::instance()->run_for_sale($sale_id, $buyer, $reason, $uid)`.
+
+**tgs-viettel-invoice:**
+- `class-tgs-viettel-invoice-replacement.php` — hàng đợi
+  `{base_prefix}tgs_viettel_invoice_replacements` (DDL trong `clusters.php`, bump
+  `DB_VERSION` 1.2.0). `build_payload()` clone `issue_request_payload` của hoá
+  đơn gốc, giữ nguyên `itemInfo`/`summarizeInfo`/`taxBreakdowns`/`payments`, đổi
+  `generalInvoiceInfo`: `adjustmentType = '3'`, `adjustmentInvoiceType = '1'`,
+  `originalInvoiceId` + `originalInvoiceIssueDate`, `transactionUuid` mới,
+  `adjustedNote`/`invoiceNote`/`additionalReferenceDesc` = "Thay thế cho HĐ số
+  … ngày … - <lý do>"; merge `buyerInfo` (chỉ trường được sửa).
+- `TGS_Viettel_Invoice_Plugin::issue_replacement()` / `send_replacement_cqt()` /
+  `retry_replacement_cqt()` — song song với `issue_return_adjustment` (dùng chung
+  `submit_invoice_payload`, `build_send_cqt_payload`, `update_auto_flow_tracking`).
+  Bản ghi mới: `request_mode = 'replacement'`, **`sale_ledger_id` = phiếu bán**
+  (id lớn hơn → mọi báo cáo join `MAX(local_viettel_invoice_id)` theo sale sẽ
+  hiện hoá đơn thay thế). Gửi CQT xong → `mark_invoice_replaced()` đặt hoá đơn
+  gốc `invoice_state = 'replaced'` + ghi `issue_response_payload.replaced_by`.
+- **Idempotency:** queue `status = 'done'` → không phát hành lại; issue OK mà CQT
+  lỗi → chỉ `retry_replacement_cqt`.
+
+**CÔNG TẮC: MẶC ĐỊNH BẬT** (theo yêu cầu người dùng). Kill switch khi cần dừng
+gấp trên **site shop**: `update_option('tgs_viettel_replacement_enabled', 0)`.
+Preview vẫn chạy kể cả khi kill.
+
+> ⚠ Payload `adjustmentType = 3` là suy từ tài liệu SInvoice + luồng điều chỉnh,
+> **chưa kiểm chứng với API Viettel thật**. `get_settings_for_invoice()` khi
+> chạy chéo site (switch_to_blog) chưa soi kỹ blog-safe. Nên chạy 1 lần trên
+> tài khoản UAT trước khi tin dùng ở shop thật.
+
+Nhật ký: `TGS_Audit_Log` channel `bctk_vat` / action `vat_replace_invoice`
+(đã thêm vào `LABELS` + `default_zalo_actions()`), `severity = sensitive` → Zalo.
 
 ### 6.3 Modal là component dùng chung
 

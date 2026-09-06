@@ -212,6 +212,31 @@
         +       '</div>'
         +     '</div>'
         +   '</div>'
+
+        +   '<div class="pm-pick pm-repl bctk-hidden" id="pmRepl">'
+        +     '<div class="pm-pick__card pm-repl__card">'
+        +       '<div class="pm-pick__head">'
+        +         '<strong>Lập hoá đơn thay thế (Viettel)</strong>'
+        +         '<button type="button" class="pm-modal__x" id="pmReplClose" title="Đóng">&times;</button>'
+        +       '</div>'
+        +       '<div class="pm-repl__body">'
+        +         '<p class="pm-repl__hint">Hoá đơn đã phát hành nhưng SAI thông tin bên mua. Sửa lại cho chuẩn → hệ thống phát hành hoá đơn <b>thay thế toàn bộ</b> cho hoá đơn gốc qua Viettel và <b>tự gửi CQT</b>. Hàng hoá / tiền / thuế GIỮ NGUYÊN của hoá đơn gốc.</p>'
+        +         '<div class="pm-repl__cur" id="pmReplCur"></div>'
+        +         '<label class="pm-repl__f pm-repl__f--wide"><span>Tên người mua</span><input type="text" id="pmReplName" autocomplete="off"></label>'
+        +         '<label class="pm-repl__f pm-repl__f--wide"><span>Tên đơn vị (pháp lý)</span><input type="text" id="pmReplLegal" autocomplete="off"></label>'
+        +         '<label class="pm-repl__f"><span>Mã số thuế</span><input type="text" id="pmReplMst" autocomplete="off" inputmode="numeric"></label>'
+        +         '<label class="pm-repl__f"><span>Điện thoại</span><input type="text" id="pmReplPhone" autocomplete="off"></label>'
+        +         '<label class="pm-repl__f pm-repl__f--wide"><span>Địa chỉ</span><input type="text" id="pmReplAddr" autocomplete="off"></label>'
+        +         '<label class="pm-repl__f pm-repl__f--wide"><span>Email</span><input type="text" id="pmReplEmail" autocomplete="off"></label>'
+        +         '<label class="pm-repl__f pm-repl__f--wide"><span>Lý do</span><textarea id="pmReplReason" rows="3" placeholder="VD: sai MST bên mua"></textarea></label>'
+        +         '<div class="pm-repl__err bctk-hidden" id="pmReplErr"></div>'
+        +       '</div>'
+        +       '<div class="pm-pick__foot">'
+        +         '<button type="button" class="bctk-btn" id="pmReplCancel">Huỷ</button>'
+        +         '<button type="button" class="bctk-btn bctk-btn--danger" id="pmReplSave">Phát hành thay thế + gửi CQT</button>'
+        +       '</div>'
+        +     '</div>'
+        +   '</div>'
         + '</div></div>';
 
         $('body').append(html);
@@ -283,15 +308,65 @@
             pickChoose(pickItems[parseInt(this.getAttribute('data-i'), 10)]);
         });
 
+        // ── Lập hoá đơn thay thế (chỉ VAT truyền onIssueReplacement) ──
+        $m.on('click', '#pmReplClose, #pmReplCancel', closeReplForm);
+        $m.on('click', '#pmReplSave', submitReplForm);
+
         $(document).on('keydown', function (e) {
             if (e.key !== 'Escape') { return; }
             if (!$('#pmEditWarn').hasClass('bctk-hidden')) { closeEditWarn(); return; }
             if ($m.hasClass('bctk-hidden')) { return; }
-            if (!$('#pmPick').hasClass('bctk-hidden')) { closePick(); }
+            if (!$('#pmRepl').hasClass('bctk-hidden')) { closeReplForm(); }
+            else if (!$('#pmPick').hasClass('bctk-hidden')) { closePick(); }
             else if (!$('#pmPdf').hasClass('bctk-hidden')) { closePdf(); }
             else if (editing) { cancelEdit(); }
             else { close(); }
         });
+    }
+
+    /* ── Lập hoá đơn thay thế qua Viettel ──────────────────────────────────── */
+    function openReplForm() {
+        if (typeof opts.onIssueReplacement !== 'function' || !current) { return; }
+        var r = current;
+        $('#pmReplCur').html(
+            'Hoá đơn gốc: <b>Seri</b> ' + esc(r.seri || '—')
+            + ' · <b>Số</b> ' + esc(r.so_hd || '—')
+            + ' · <b>Ngày</b> ' + esc(r.ngay_hd || '—')
+        );
+        // Prefill từ thông tin bên mua đang có trên phiếu (dòng bảng đã có sẵn).
+        $('#pmReplName').val(r.ten_kh || r.ten_cty_mua || '');
+        $('#pmReplLegal').val(r.ten_cty_mua || '');
+        $('#pmReplMst').val(r.mst_mua || '');
+        $('#pmReplAddr').val(r.dchi_mua || '');
+        $('#pmReplPhone').val(r.dt_mua || '');
+        $('#pmReplEmail').val(r.email_mua || '');
+        $('#pmReplReason').val('');
+        $('#pmReplErr').addClass('bctk-hidden').text('');
+        $('#pmRepl').removeClass('bctk-hidden').attr('aria-hidden', 'false');
+        setTimeout(function () { $('#pmReplMst').trigger('focus'); }, 30);
+    }
+    function closeReplForm() {
+        $('#pmRepl').addClass('bctk-hidden').attr('aria-hidden', 'true');
+    }
+    function submitReplForm() {
+        if (typeof opts.onIssueReplacement !== 'function' || !current) { return; }
+        var buyer = {
+            buyerName: String($('#pmReplName').val() || '').trim(),
+            buyerLegalName: String($('#pmReplLegal').val() || '').trim(),
+            buyerTaxCode: String($('#pmReplMst').val() || '').trim(),
+            buyerAddressLine: String($('#pmReplAddr').val() || '').trim(),
+            buyerPhoneNumber: String($('#pmReplPhone').val() || '').trim(),
+            buyerEmail: String($('#pmReplEmail').val() || '').trim()
+        };
+        var reason = String($('#pmReplReason').val() || '').trim();
+        if (!window.confirm(
+            'Phát hành HOÁ ĐƠN THAY THẾ cho hoá đơn gốc ' + (current.so_hd || '')
+            + ' và tự gửi CQT?\n\nThao tác này KHÔNG hoàn tác được.'
+        )) { return; }
+        $('#pmReplErr').addClass('bctk-hidden').text('');
+        $('#pmReplSave, #pmReplCancel').prop('disabled', true);
+        api.toast('info', 'Đang phát hành hoá đơn thay thế…');
+        opts.onIssueReplacement(current, { buyer: buyer, reason: reason }, api);
     }
 
     /* Cảnh báo trước khi vào sửa dòng hàng — xem chú thích ở build().
@@ -926,6 +1001,13 @@
         applyNote: function (noteText) {
             current.ghi_chu = noteText || '';
             renderFoot(current);
+        },
+        // ── Lập hoá đơn thay thế ──
+        openReplForm: openReplForm,
+        closeReplForm: closeReplForm,
+        replError: function (msg) {
+            $('#pmReplErr').text(msg || 'Có lỗi.').removeClass('bctk-hidden');
+            $('#pmReplSave, #pmReplCancel').prop('disabled', false);
         }
     };
 
@@ -957,6 +1039,7 @@
         $('#pmModal').addClass('bctk-hidden').attr('aria-hidden', 'true');
         closePdf();
         closePick();
+        closeReplForm();
         editing = false;
         editLines = [];
         current = null;

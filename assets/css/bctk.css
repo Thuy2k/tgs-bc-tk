@@ -768,6 +768,38 @@ select.pm-line__in { padding-right: 2px; }
 .pm-pick__hint { color: #94a3b8; font-size: 11.5px; }
 .pm-pick__foot .bctk-btn { padding: 6px 20px; }
 
+/* ── Lập hoá đơn thay thế (overlay dùng lại khung .pm-pick) ── */
+.pm-repl__card { width: min(880px, 96vw); max-height: min(94vh, 860px); }
+.pm-repl__body {
+    flex: 1 1 auto; overflow: auto; padding: 16px 20px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px 18px; align-content: start;
+}
+.pm-repl__hint,
+.pm-repl__cur,
+.pm-repl__err,
+.pm-repl__f--wide { grid-column: 1 / -1; }
+.pm-repl__hint { margin: 0; font-size: 12px; line-height: 1.55; color: #64748b; }
+.pm-repl__cur {
+    font-size: 12px; color: #334155;
+    background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 11px;
+}
+.pm-repl__f { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.pm-repl__f > span { font-weight: 600; color: #334155; }
+.pm-repl__f input, .pm-repl__f textarea {
+    box-sizing: border-box; width: 100%;
+    padding: 9px 12px; font: inherit; font-size: 13.5px;
+    border: 1px solid #cbd5e1; border-radius: 6px;
+}
+.pm-repl__f textarea { resize: vertical; min-height: 62px; }
+.pm-repl__f input:focus, .pm-repl__f textarea:focus { outline: 2px solid #bfdbfe; border-color: #60a5fa; }
+.pm-repl__err {
+    font-size: 12.5px; color: #b91c1c; font-weight: 600;
+    background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; padding: 8px 11px;
+}
+@media (max-width: 620px) {
+    .pm-repl__body { grid-template-columns: 1fr; }
+}
+
 /* ── Sửa ghi chú ── */
 .pm-foot3__boxhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .pm-foot3__boxhead h4 { margin: 0 0 5px; }

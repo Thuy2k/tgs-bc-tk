@@ -86,6 +86,7 @@ class TGS_BCTK_Ajax
         add_action('wp_ajax_tgs_bctk_vat_pdf', [__CLASS__, 'vat_pdf']);
         add_action('wp_ajax_tgs_bctk_vat_save_lines', [__CLASS__, 'vat_save_lines']);
         add_action('wp_ajax_tgs_bctk_vat_save_note', [__CLASS__, 'vat_save_note']);
+        add_action('wp_ajax_tgs_bctk_vat_issue_replacement', [__CLASS__, 'vat_issue_replacement']);
         // Xem lại MỘT phiếu bán từ các màn báo cáo bán hàng (chỉ đọc + sửa ghi chú)
         add_action('wp_ajax_tgs_bctk_phieu_view', [__CLASS__, 'phieu_view']);
         // Xem lại MỘT phiếu NHẬP KHO từ 2 màn báo cáo mua hàng (chỉ đọc + sửa ghi chú)
@@ -2920,6 +2921,96 @@ class TGS_BCTK_Ajax
 
             if ($switched) { restore_current_blog(); $switched = false; }
             wp_send_json_success(['ghi_chu' => $note, 'message' => 'Đã lưu ghi chú.']);
+        } finally {
+            if ($switched) { restore_current_blog(); }
+        }
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════════
+     * LẬP HOÁ ĐƠN THAY THẾ QUA VIETTEL (adjustmentType = 3) + tự gửi CQT
+     *
+     * Hoá đơn đã phát hành mà sai thông tin bên mua (MST, tên, địa chỉ…). Sửa
+     * lại buyerInfo, phát hành hoá đơn thay thế toàn bộ cho hoá đơn gốc, tự gửi
+     * CQT. Chạy trên site shop (switch_to_blog) → TGS_Viettel_Invoice_Replacement.
+     *
+     * $_POST: blog_id, sale_id, buyer (JSON), reason, [preview = 1]
+     * ═══════════════════════════════════════════════════════════════════════ */
+    public static function vat_issue_replacement()
+    {
+        check_ajax_referer(self::NONCE, 'nonce');
+        if (!current_user_can(TGS_BCTK_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Không có quyền lập hoá đơn thay thế.'], 403);
+        }
+
+        $blog_id = (int) ($_POST['blog_id'] ?? 0);
+        $sale_id = (int) ($_POST['sale_id'] ?? 0);
+        $preview = !empty($_POST['preview']) && $_POST['preview'] !== '0' && $_POST['preview'] !== 'false';
+        $reason  = trim(sanitize_textarea_field((string) wp_unslash($_POST['reason'] ?? '')));
+        $buyer_raw = json_decode((string) wp_unslash($_POST['buyer'] ?? '[]'), true);
+        $buyer = is_array($buyer_raw) ? $buyer_raw : [];
+
+        if ($blog_id <= 0 || $sale_id <= 0) {
+            wp_send_json_error(['message' => 'Thiếu blog_id / sale_id.'], 400);
+        }
+
+        $report_blog = get_current_blog_id();
+        $switched = false;
+        if (function_exists('switch_to_blog') && get_current_blog_id() !== $blog_id) {
+            switch_to_blog($blog_id);
+            $switched = true;
+        }
+
+        try {
+            if (!class_exists('TGS_Viettel_Invoice_Replacement')) {
+                wp_send_json_error(['message' => 'Plugin hoá đơn Viettel chưa nạp lớp thay thế trên site shop.'], 500);
+            }
+            $svc = TGS_Viettel_Invoice_Replacement::instance();
+            if (!$svc) {
+                wp_send_json_error(['message' => 'Chưa khởi tạo được dịch vụ hoá đơn thay thế.'], 500);
+            }
+
+            $res = $svc->run_for_sale($sale_id, $buyer, $reason, get_current_user_id(), $preview);
+
+            // Nhật ký + Zalo khi phát hành thật thành công.
+            if (!$preview && !empty($res['success']) && class_exists('TGS_Audit_Log')) {
+                global $wpdb;
+                $sale_code = (string) $wpdb->get_var($wpdb->prepare(
+                    "SELECT local_ledger_code FROM {$wpdb->prefix}local_ledger WHERE local_ledger_id = %d LIMIT 1",
+                    $sale_id
+                ));
+                $shop_code = (string) $wpdb->get_var($wpdb->prepare(
+                    "SELECT tgs_site_code FROM {$wpdb->base_prefix}blogs WHERE blog_id = %d",
+                    $blog_id
+                ));
+                TGS_Audit_Log::record([
+                    'channel'      => 'bctk_vat',
+                    'action'       => 'vat_replace_invoice',
+                    'action_label' => 'Lập hoá đơn thay thế qua Viettel',
+                    'severity'     => 'sensitive',
+                    'admin_blog'   => (int) $report_blog,
+                    'site'         => ['blog_id' => $blog_id, 'code' => $shop_code, 'name' => get_bloginfo('name')],
+                    'target'       => ['type' => 'phieu_xuat_ban_vat', 'id' => $sale_id, 'code' => $sale_code, 'shop' => $shop_code],
+                    'summary'      => sprintf(
+                        'Phát hành hoá đơn thay thế phiếu %s → số HĐ %s%s',
+                        $sale_code,
+                        (string) ($res['invoice_no'] ?? '(?)'),
+                        $reason !== '' ? ' — Lý do: ' . $reason : ''
+                    ),
+                    'changes'      => [
+                        'replacement_invoice_no' => (string) ($res['invoice_no'] ?? ''),
+                        'corrected_buyer'        => $buyer,
+                        'reason'                 => $reason,
+                    ],
+                ]);
+            }
+
+            $row = ($sale_id > 0) ? self::vat_row_for_sale($blog_id, $sale_id) : null;
+
+            if ($switched) { restore_current_blog(); $switched = false; }
+
+            $ok = !empty($res['success']);
+            $payload = ['result' => $res, 'row' => $row, 'message' => (string) ($res['message'] ?? '')];
+            $ok ? wp_send_json_success($payload) : wp_send_json_error($payload, 400);
         } finally {
             if ($switched) { restore_current_blog(); }
         }
