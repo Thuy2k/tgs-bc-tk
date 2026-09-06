@@ -257,6 +257,15 @@ cột (Enter ở dòng cuối = thêm dòng). Bấm **💾 Lưu** →
 > ba chỗ đó đã đổi sang **luôn tải mới** (`forceReload`) khi mở bill — nếu không
 > quầy mở lại bill sẽ thấy dòng hàng CŨ dù DB đã đúng.
 
+> **Tách một dòng thành nhiều dòng CÙNG MÃ HÀNG trên cùng bill** (vd `N` sp có
+> giá + `1` sp 0đ khuyến mãi): mẫu bill của `tgs_pos`
+> (`pos-receipt-template.js` → `groupItemsByProduct`) khoá gộp dòng theo
+> **mã hàng + ĐVT + đơn giá sau thuế**, nên hai dòng cùng mã khác giá vẫn hiện
+> RIÊNG. Trước 09/2026 nó chỉ khoá theo mã hàng → dòng 0đ bị nuốt vào dòng có
+> giá, bill in lại thiếu hàng và lệch tổng. Nếu tách hai dòng **cùng giá** thì
+> mẫu bill vẫn gộp lại làm một (đúng — chúng là cùng một thứ), có cộng dồn SL +
+> tiền.
+
 **Ghi chú phiếu** có nút **"✎ Sửa ghi chú"** riêng (dưới, khối Nhân viên & ghi
 chú) → textarea → `tgs_bctk_vat_save_note` → lưu **THẲNG** vào
 `local_ledger_note` (đúng chữ kế toán nhập, rỗng ⇒ để trống). Không còn bọc
