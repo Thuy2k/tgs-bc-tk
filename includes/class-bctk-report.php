@@ -1727,7 +1727,12 @@ class TGS_BCTK_Report
         foreach ($rows as $r) {
             $parent = strtoupper(trim((string) ($r['parent_code'] ?? '')));
             $code   = strtoupper(trim((string) ($r['code'] ?? '')));
-            $is_z   = ($parent !== '' && $code === $parent . $suffix);
+            /*
+             * Bill Z = CÓ phiếu cha + mã kết thúc bằng "Z". Đúng cho cả dạng cũ
+             * (mã con = mã cha + "Z") lẫn dạng mới ({shop}Z{số}Z ≠ mã cha + "Z").
+             * Mã ngẫu nhiên đời cũ tự đuôi Z (HD…Z) không có phiếu cha nên vẫn bị loại.
+             */
+            $is_z   = ($parent !== '' && $suffix !== '' && substr($code, -strlen($suffix)) === $suffix);
             $r['is_z'] = $is_z ? 1 : 0;
 
             if ($bill_scope === 'normal' && $is_z) {
@@ -1932,7 +1937,8 @@ class TGS_BCTK_Report
             $pid  = (int) ($r['sale_parent_id'] ?? 0);
             $pcode = $parent_code_map[$pid] ?? '';
             $scode = strtoupper(trim((string) ($r['sale_code'] ?? '')));
-            $is_z = ($pcode !== '' && $scode === $pcode . $suffix);
+            // Bill Z = phiếu bán gốc CÓ cha + mã kết thúc bằng "Z" (dạng cũ lẫn mới).
+            $is_z = ($pcode !== '' && $suffix !== '' && substr($scode, -strlen($suffix)) === $suffix);
             $r['is_z'] = $is_z ? 1 : 0;
 
             if ($bill_scope === 'normal' && $is_z) {

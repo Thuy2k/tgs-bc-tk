@@ -1874,7 +1874,9 @@ class TGS_BCTK_Ajax
                 $pid
             ));
             $suffix = class_exists('TGS_BCTK_Report') ? strtoupper(TGS_BCTK_Report::promo_suffix()) : 'Z';
-            $is_z = $pcode !== '' && strtoupper(trim($sale['local_ledger_code'])) === strtoupper(trim($pcode)) . $suffix;
+            // Bill Z = có cha + mã kết thúc bằng "Z" (dạng cũ mã cha+"Z", dạng mới {shop}Z{số}Z).
+            $scode = strtoupper(trim((string) $sale['local_ledger_code']));
+            $is_z = $pcode !== '' && $suffix !== '' && substr($scode, -strlen($suffix)) === $suffix;
         }
 
         if (!$is_z
