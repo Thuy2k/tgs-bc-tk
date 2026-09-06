@@ -275,8 +275,10 @@
                 // ĐÃ phát hành mà SAI thông tin bên mua (MST, tên đơn vị…): sửa
                 // buyerInfo → phát hành hoá đơn THAY THẾ toàn bộ qua Viettel
                 // (adjustmentType 3) + tự gửi CQT. Không đổi hàng hoá / tiền.
+                // Ẩn khi đơn ĐÃ CÓ phiếu hoàn — Viettel không cho thay thế hoá
+                // đơn đã bị điều chỉnh giảm.
                 id: 'replace', label: 'Lập HĐ thay thế',
-                when: function (r) { return !isAdjust && issued(r); },
+                when: function (r) { return !isAdjust && issued(r) && Number(r.has_return) !== 1; },
                 run: function (r, api) { api.openReplForm(); }
             }
         ];

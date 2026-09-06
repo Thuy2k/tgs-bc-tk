@@ -357,6 +357,14 @@ vị, địa chỉ…). Nút **"Lập HĐ thay thế"** (hiện khi `issued(r)`,
   gốc `invoice_state = 'replaced'` + ghi `issue_response_payload.replaced_by`.
 - **Idempotency:** queue `status = 'done'` → không phát hành lại; issue OK mà CQT
   lỗi → chỉ `retry_replacement_cqt`.
+- **Chặn khi đơn đã hoàn:** nút "Lập HĐ thay thế" ẩn khi `has_return = 1`
+  (client); `run_for_sale()` cũng preflight `blocked_by_return_adjustment()` —
+  có phiếu hoàn (`local_ledger` type 11) hoặc hàng đợi `return_adjustments` chưa
+  skipped → trả lỗi. Viettel không cho thay thế hoá đơn đã bị điều chỉnh giảm.
+- **Hoàn hàng SAU khi thay thế:** `TGS_Viettel_Invoice_Return_Adjustment::find_original_invoice()`
+  đã sửa nhận `request_mode IN ('issue','replacement')` + loại `invoice_state='replaced'`
+  → điều chỉnh giảm nhắm vào hoá đơn thay thế mới. `process()` / `ajax_preview()`
+  re-resolve nếu `$original.invoice_state==='replaced'`.
 
 **CÔNG TẮC: MẶC ĐỊNH BẬT** (theo yêu cầu người dùng). Kill switch khi cần dừng
 gấp trên **site shop**: `update_option('tgs_viettel_replacement_enabled', 0)`.
