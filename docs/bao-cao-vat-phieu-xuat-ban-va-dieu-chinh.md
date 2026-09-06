@@ -256,6 +256,12 @@ cột (Enter ở dòng cuối = thêm dòng). Bấm **💾 Lưu** →
    toán** để thu lại tiền cho đúng tổng mới (bc-tk **không** tự tạo lại phiếu thu
    — không biết khách trả bằng gì). **Sửa mà KHÔNG lệch tiền thì không đụng phiếu
    thu.** Số phiếu thu đã xoá cũng đẩy vào hook nhật ký (`paid_receipts_deleted`).
+   Đồng thời **dọn nốt ảnh chụp thanh toán đọng trên phiếu bán**: mảng
+   `payment_receipts` / `pending_payment_receipts` / `is_split_payment` trong
+   `local_ledger_meta` của phiếu bán, và khoá `pos_payment` (customer_paid /
+   change_amount / receipts) trong `local_ledger_advance_meta`. Không dọn thì màn
+   **Đơn hàng** của `tgs_pos` (khi hết phiếu thu type 7 thì fallback đọc mảng
+   này) vẫn hiện cột "Đã thu" bằng số cũ dù modal Lịch sử thanh toán đã 0đ.
 7. Trả về payload phiếu mới → modal cập nhật tại chỗ, bảng chạy lại tìm kiếm.
 
 > Màn xem bill của `tgs_pos` (Đơn hàng ở app POS, Lịch sử đơn hàng, Sổ khách

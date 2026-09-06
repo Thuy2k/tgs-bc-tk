@@ -2629,6 +2629,66 @@ class TGS_BCTK_Ajax
                     $deleted_receipts = count($receipt_ids);
                 }
 
+                /*
+                 * ─── DỌN "ẢNH CHỤP THANH TOÁN" ĐỌNG TRÊN PHIẾU BÁN ──────────
+                 *
+                 * Xoá dòng phiếu thu type 7 thôi CHƯA đủ: màn Đơn hàng của
+                 * tgs_pos (list_orders → format_list_order_row), khi không tìm
+                 * thấy phiếu thu type 7 nào còn sống, QUAY VỀ đọc mảng
+                 * `payment_receipts` lưu trong `local_ledger_meta` của phiếu
+                 * bán lúc bán — nên cột "Đã thu" vẫn hiện số cũ (1.800.000đ)
+                 * dù modal Lịch sử thanh toán đã 0đ. Dọn nốt cho khớp.
+                 */
+                $sale_meta_id = (int) ($ctx['sale']['local_ledger_meta_id'] ?? 0);
+                if ($sale_meta_id > 0) {
+                    $sm_raw = $wpdb->get_var($wpdb->prepare(
+                        "SELECT local_ledger_meta_value FROM {$M} WHERE local_ledger_meta_id = %d",
+                        $sale_meta_id
+                    ));
+                    $sm = json_decode((string) $sm_raw, true);
+                    if (is_array($sm)) {
+                        $sm['payment_receipts'] = [];
+                        $sm['pending_payment_receipts'] = [];
+                        $sm['is_split_payment'] = 0;
+                        $sm['payment_sync_status'] = 'pending';
+                        $wpdb->update(
+                            $M,
+                            [
+                                'local_ledger_meta_value' => wp_json_encode($sm, JSON_UNESCAPED_UNICODE),
+                                'updated_at' => $now,
+                            ],
+                            ['local_ledger_meta_id' => $sale_meta_id]
+                        );
+                    }
+                }
+
+                /*
+                 * Ảnh chụp thứ hai: cột JSON local_ledger_advance_meta (khoá
+                 * pos_payment) — "số khách đưa / tiền thối" in lại trên bill.
+                 * Có site chưa chạy migration nên chưa có cột này.
+                 */
+                if ($wpdb->get_var($wpdb->prepare(
+                    "SHOW COLUMNS FROM {$L} LIKE %s",
+                    'local_ledger_advance_meta'
+                )) === 'local_ledger_advance_meta') {
+                    $am_raw = $wpdb->get_var($wpdb->prepare(
+                        "SELECT local_ledger_advance_meta FROM {$L} WHERE local_ledger_id = %d",
+                        $sale_id
+                    ));
+                    $am = json_decode((string) $am_raw, true);
+                    if (is_array($am) && is_array($am['pos_payment'] ?? null)) {
+                        $am['pos_payment']['customer_paid'] = 0;
+                        $am['pos_payment']['change_amount'] = 0;
+                        $am['pos_payment']['receipts'] = [];
+                        $am['pos_payment']['is_split_payment'] = 0;
+                        $wpdb->update(
+                            $L,
+                            ['local_ledger_advance_meta' => wp_json_encode($am, JSON_UNESCAPED_UNICODE)],
+                            ['local_ledger_id' => $sale_id]
+                        );
+                    }
+                }
+
                 // Tính lại: giờ chỉ còn phiếu chi (type 8) nếu có, phiếu thu = 0.
                 $paid = (float) $wpdb->get_var($wpdb->prepare(
                     "SELECT COALESCE(SUM(local_ledger_total_amount), 0) FROM {$L}
