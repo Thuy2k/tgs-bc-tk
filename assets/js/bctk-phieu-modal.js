@@ -226,7 +226,8 @@
          *
          * KHÔNG khoá nút: giữ nguyên chức năng sửa (phòng khi sau này vẫn cần),
          * chỉ chặn một nhịp cảnh báo đỏ trước khi vào sửa — bấm "Vẫn sửa dòng
-         * hàng" là vào y như cũ.
+         * hàng" là vào y như cũ. Không còn hỏi mật khẩu: ai đọc kỹ cảnh báo mà
+         * vẫn muốn sửa thì cho sửa.
          */
         var warnHtml =
         '<div class="pm-warn bctk-hidden" id="pmEditWarn" aria-hidden="true">'
@@ -243,11 +244,6 @@
         +     ' để phiếu đó <b>hoãn gửi thuế</b> khi CHƯA gửi hoá đơn.'
         +     '<br><br>'
         +     'Nút sửa dòng hàng vẫn giữ lại đây (phòng khi cần), nhưng không thuộc quy trình hiện tại.'
-        +   '</div>'
-        +   '<div class="pm-warn__pw">'
-        +     '<label for="pmEditWarnPw">Vẫn muốn sửa? Nhập mật khẩu để tiếp tục</label>'
-        +     '<input type="password" id="pmEditWarnPw" autocomplete="off" placeholder="Mật khẩu">'
-        +     '<div class="pm-warn__pwerr bctk-hidden" id="pmEditWarnPwErr">Sai mật khẩu.</div>'
         +   '</div>'
         +   '<div class="pm-warn__foot">'
         +     '<button type="button" class="bctk-btn" data-pm-warn-close>Đóng</button>'
@@ -266,11 +262,7 @@
         });
         $m.on('click', '#pmEditStart', openEditWarn);
         $(document).on('click', '#pmEditWarn [data-pm-warn-close]', closeEditWarn);
-        $(document).on('click', '#pmEditWarnProceed', tryProceedEditWarn);
-        $(document).on('keydown', '#pmEditWarnPw', function (e) {
-            $('#pmEditWarnPwErr').addClass('bctk-hidden');
-            if (e.key === 'Enter') { e.preventDefault(); tryProceedEditWarn(); }
-        });
+        $(document).on('click', '#pmEditWarnProceed', proceedEditWarn);
         $m.on('click', '#pmEditSave', saveEdit);
         $m.on('click', '#pmEditCancel', cancelEdit);
         $m.on('click', '#pmEditAdd', function () { openPick('add', -1); });
@@ -302,25 +294,15 @@
         });
     }
 
-    /* Cảnh báo trước khi vào sửa dòng hàng — xem chú thích ở build(). */
-    // Chỉ để cản bấm nhầm — KHÔNG phải hàng rào bảo mật (mật khẩu nằm ngay
-    // trong JS gửi về trình duyệt, ai xem mã nguồn cũng đọc được).
-    var EDIT_WARN_PASSWORD = 'Thuy!@#';
-
+    /* Cảnh báo trước khi vào sửa dòng hàng — xem chú thích ở build().
+     * Chỉ là một nhịp cản bấm nhầm, không phải hàng rào bảo mật: đọc cảnh báo
+     * xong vẫn muốn sửa thì bấm "Vẫn sửa dòng hàng" là vào. */
     function openEditWarn() {
-        $('#pmEditWarnPw').val('');
-        $('#pmEditWarnPwErr').addClass('bctk-hidden');
         $('#pmEditWarn').removeClass('bctk-hidden').attr('aria-hidden', 'false');
-        setTimeout(function () { $('#pmEditWarnPw').trigger('focus'); }, 30);
+        setTimeout(function () { $('#pmEditWarnProceed').trigger('focus'); }, 30);
     }
     function closeEditWarn() { $('#pmEditWarn').addClass('bctk-hidden').attr('aria-hidden', 'true'); }
-    function tryProceedEditWarn() {
-        var pw = String($('#pmEditWarnPw').val() || '');
-        if (pw !== EDIT_WARN_PASSWORD) {
-            $('#pmEditWarnPwErr').removeClass('bctk-hidden');
-            $('#pmEditWarnPw').trigger('select');
-            return;
-        }
+    function proceedEditWarn() {
         closeEditWarn();
         startEdit();
     }
