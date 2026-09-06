@@ -247,8 +247,15 @@ cột (Enter ở dòng cuối = thêm dòng). Bấm **💾 Lưu** →
 5. `local_ledger_total_amount` chỉ ghi cho **phiếu bán + phiếu xuất**
    (= `TGS_Money::total()['thanh_tien_dong']`); phiếu thu/chi giữ số tiền của
    chính nó.
-6. Đối chiếu tiền đã thu (phiếu thu type 7/8 đã duyệt); lệch ≥ 1đ → trả
-   **cảnh báo** để kế toán xử phiếu thu / công nợ.
+6. **Đối chiếu tiền đã thu → lệch thì XOÁ SẠCH PHIẾU THU.** So tổng phiếu mới
+   với tiền đã thu (phiếu thu/chi type 7/8 đã duyệt). Lệch ≥ 1đ →
+   **xoá hẳn mọi phiếu thu (type 7) con của đơn** — cả dòng `local_ledger` lẫn
+   `local_ledger_meta` của chính phiếu thu (`DELETE`, không soft). Tiền đã thu
+   của đơn về 0, khách thành đang nợ. `warning` trả về nói rõ đã xoá mấy phiếu +
+   số tiền khách nợ; nhân viên phải vào **`tgs_pos` → mở bill → Lịch sử thanh
+   toán** để thu lại tiền cho đúng tổng mới (bc-tk **không** tự tạo lại phiếu thu
+   — không biết khách trả bằng gì). **Sửa mà KHÔNG lệch tiền thì không đụng phiếu
+   thu.** Số phiếu thu đã xoá cũng đẩy vào hook nhật ký (`paid_receipts_deleted`).
 7. Trả về payload phiếu mới → modal cập nhật tại chỗ, bảng chạy lại tìm kiếm.
 
 > Màn xem bill của `tgs_pos` (Đơn hàng ở app POS, Lịch sử đơn hàng, Sổ khách
