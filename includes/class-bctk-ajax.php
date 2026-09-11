@@ -2588,127 +2588,24 @@ class TGS_BCTK_Ajax
             $deleted_receipts = 0;
             if (abs($paid - $grand) >= 1) {
                 /*
-                 * ─── SỬA PHIẾU LÀM LỆCH TIỀN → XOÁ SẠCH PHIẾU THU CỦA ĐƠN ─────
+                 * ─── SỬA PHIẾU LÀM LỆCH TIỀN → GIỮ NGUYÊN PHIẾU THU ───────────
                  *
-                 * Kế toán sửa dòng hàng làm tổng phiếu ≠ tiền khách đã trả. Thay
-                 * vì để phiếu thu cũ treo đó (số liệu sai, khó lần), XOÁ HẲN mọi
-                 * phiếu thu (type 7) con của đơn — cả dòng trong local_ledger lẫn
-                 * local_ledger_meta của chính nó. Tiền đã thu của đơn về 0 →
-                 * khách thành đang nợ.
-                 *
-                 * Nhân viên phải vào tgs_pos → mở lại bill → Lịch sử thanh toán
-                 * để thu lại tiền khách cho đúng tổng phiếu mới. KHÔNG tự tạo lại
-                 * phiếu thu ở đây (bc-tk không biết khách trả bằng gì, bao nhiêu).
-                 *
-                 * Sửa mà KHÔNG lệch tiền thì không đụng phiếu thu.
+                 * Trước đây: lệch tổng thì XOÁ SẠCH phiếu thu + reset ảnh chụp
+                 * thanh toán (khách về nợ). Nay theo yêu cầu — GIỐNG HTsoft: đã
+                 * thu tiền của khách rồi thì ĐỂ NGUYÊN phiếu thu, KHÔNG xoá/không
+                 * reset gì cả. Chỉ CẢNH BÁO cho kế toán biết đang lệch để tự xử
+                 * tay (thu thêm / hoàn bớt bên tgs_pos) nếu cần.
                  */
-                $M = $wpdb->prefix . 'local_ledger_meta';
-
-                $receipt_rows = $wpdb->get_results($wpdb->prepare(
-                    "SELECT local_ledger_id, local_ledger_meta_id FROM {$L}
-                      WHERE local_ledger_parent_id = %d AND local_ledger_type = 7",
-                    $sale_id
-                ), ARRAY_A) ?: [];
-
-                if ($receipt_rows) {
-                    $receipt_ids = [];
-                    $meta_ids = [];
-                    foreach ($receipt_rows as $rr) {
-                        $receipt_ids[] = (int) $rr['local_ledger_id'];
-                        if (!empty($rr['local_ledger_meta_id'])) {
-                            $meta_ids[] = (int) $rr['local_ledger_meta_id'];
-                        }
-                    }
-
-                    if ($meta_ids) {
-                        $ph = implode(',', array_fill(0, count($meta_ids), '%d'));
-                        $wpdb->query($wpdb->prepare(
-                            "DELETE FROM {$M} WHERE local_ledger_meta_id IN ({$ph})",
-                            ...$meta_ids
-                        ));
-                    }
-
-                    $ph = implode(',', array_fill(0, count($receipt_ids), '%d'));
-                    $wpdb->query($wpdb->prepare(
-                        "DELETE FROM {$L} WHERE local_ledger_id IN ({$ph})",
-                        ...$receipt_ids
-                    ));
-                    $deleted_receipts = count($receipt_ids);
+                $diff = $grand - $paid; // >0: khách còn thiếu; <0: đã thu dư
+                if ($diff > 0) {
+                    $warning = 'Sửa phiếu: tổng mới ' . number_format_i18n($grand) . 'đ LỚN HƠN tiền đã thu '
+                        . number_format_i18n($paid) . 'đ — còn thiếu ' . number_format_i18n($diff)
+                        . 'đ. Phiếu thu GIỮ NGUYÊN; thu thêm ở tgs_pos nếu cần.';
+                } else {
+                    $warning = 'Sửa phiếu: tổng mới ' . number_format_i18n($grand) . 'đ NHỎ HƠN tiền đã thu '
+                        . number_format_i18n($paid) . 'đ — thừa ' . number_format_i18n(abs($diff))
+                        . 'đ. Phiếu thu GIỮ NGUYÊN; hoàn bớt ở tgs_pos nếu cần.';
                 }
-
-                /*
-                 * ─── DỌN "ẢNH CHỤP THANH TOÁN" ĐỌNG TRÊN PHIẾU BÁN ──────────
-                 *
-                 * Xoá dòng phiếu thu type 7 thôi CHƯA đủ: màn Đơn hàng của
-                 * tgs_pos (list_orders → format_list_order_row), khi không tìm
-                 * thấy phiếu thu type 7 nào còn sống, QUAY VỀ đọc mảng
-                 * `payment_receipts` lưu trong `local_ledger_meta` của phiếu
-                 * bán lúc bán — nên cột "Đã thu" vẫn hiện số cũ (1.800.000đ)
-                 * dù modal Lịch sử thanh toán đã 0đ. Dọn nốt cho khớp.
-                 */
-                $sale_meta_id = (int) ($ctx['sale']['local_ledger_meta_id'] ?? 0);
-                if ($sale_meta_id > 0) {
-                    $sm_raw = $wpdb->get_var($wpdb->prepare(
-                        "SELECT local_ledger_meta_value FROM {$M} WHERE local_ledger_meta_id = %d",
-                        $sale_meta_id
-                    ));
-                    $sm = json_decode((string) $sm_raw, true);
-                    if (is_array($sm)) {
-                        $sm['payment_receipts'] = [];
-                        $sm['pending_payment_receipts'] = [];
-                        $sm['is_split_payment'] = 0;
-                        $sm['payment_sync_status'] = 'pending';
-                        $wpdb->update(
-                            $M,
-                            [
-                                'local_ledger_meta_value' => wp_json_encode($sm, JSON_UNESCAPED_UNICODE),
-                                'updated_at' => $now,
-                            ],
-                            ['local_ledger_meta_id' => $sale_meta_id]
-                        );
-                    }
-                }
-
-                /*
-                 * Ảnh chụp thứ hai: cột JSON local_ledger_advance_meta (khoá
-                 * pos_payment) — "số khách đưa / tiền thối" in lại trên bill.
-                 * Có site chưa chạy migration nên chưa có cột này.
-                 */
-                if ($wpdb->get_var($wpdb->prepare(
-                    "SHOW COLUMNS FROM {$L} LIKE %s",
-                    'local_ledger_advance_meta'
-                )) === 'local_ledger_advance_meta') {
-                    $am_raw = $wpdb->get_var($wpdb->prepare(
-                        "SELECT local_ledger_advance_meta FROM {$L} WHERE local_ledger_id = %d",
-                        $sale_id
-                    ));
-                    $am = json_decode((string) $am_raw, true);
-                    if (is_array($am) && is_array($am['pos_payment'] ?? null)) {
-                        $am['pos_payment']['customer_paid'] = 0;
-                        $am['pos_payment']['change_amount'] = 0;
-                        $am['pos_payment']['receipts'] = [];
-                        $am['pos_payment']['is_split_payment'] = 0;
-                        $wpdb->update(
-                            $L,
-                            ['local_ledger_advance_meta' => wp_json_encode($am, JSON_UNESCAPED_UNICODE)],
-                            ['local_ledger_id' => $sale_id]
-                        );
-                    }
-                }
-
-                // Tính lại: giờ chỉ còn phiếu chi (type 8) nếu có, phiếu thu = 0.
-                $paid = (float) $wpdb->get_var($wpdb->prepare(
-                    "SELECT COALESCE(SUM(local_ledger_total_amount), 0) FROM {$L}
-                      WHERE local_ledger_parent_id = %d AND local_ledger_type IN (7, 8)
-                        AND (local_ledger_approver_status = 1)
-                        AND (is_deleted = 0 OR is_deleted IS NULL)",
-                    $sale_id
-                ));
-
-                $debt = max(0, $grand - $paid);
-                $warning = 'Sửa phiếu làm lệch tiền — đã XOÁ ' . $deleted_receipts . ' phiếu thu của đơn. '
-                    . 'Tiền đã thu về ' . number_format_i18n($paid) . 'đ, khách đang nợ '
-                    . number_format_i18n($debt) . 'đ. Vào tgs_pos → mở bill → Lịch sử thanh toán để thu lại tiền khách.';
             }
 
             /*
