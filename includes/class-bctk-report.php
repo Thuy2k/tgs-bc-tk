@@ -927,7 +927,8 @@ class TGS_BCTK_Report
                 COALESCE(pe.local_ledger_person_name, '')  AS kh_ten,
                 COALESCE(pe.local_ledger_person_phone, '') AS kh_dt,
                 COALESCE(pn.local_product_unit, '')        AS dvcb_local,
-                JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label')) AS httt,
+                COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label_htsoft')), ''),
+                         JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label'))) AS httt,
                 /* Kênh (nguồn bán) và Lý do xuất động — do màn bán hàng POS ghi,
                    xem TGS_POS_Sale_Source / TGS_POS_Export_Reason bên tgs_pos. */
                 JSON_UNQUOTE(JSON_EXTRACT(p.local_ledger_advance_meta, '$.pos_sale_source')) AS kenh_dyn,
@@ -1070,7 +1071,8 @@ class TGS_BCTK_Report
                 COALESCE(pe.local_ledger_person_name, '')  AS kh_ten,
                 COALESCE(pe.local_ledger_person_phone, '') AS kh_dt,
                 COALESCE(d.local_ledger_note, '')          AS ghi_chu,
-                JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label')) AS httt,
+                COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label_htsoft')), ''),
+                         JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label'))) AS httt,
                 /* Kênh/Lý do xuất động — chỉ có ý nghĩa với phiếu BÁN (type 10);
                    phiếu hoàn (type 11) không có nguồn bán riêng, JSON_EXTRACT
                    trên phiếu hoàn ra NULL là đúng, build_sales_sum_rows() giữ
@@ -1703,7 +1705,8 @@ class TGS_BCTK_Report
                 COALESCE(pe.local_ledger_person_address, '')        AS kh_dchi,
                 COALESCE(pe.local_ledger_person_email, '')          AS kh_email,
                 {$mst_expr}                                         AS kh_mst,
-                JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label')) AS httt,
+                COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label_htsoft')), ''),
+                         JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label'))) AS httt,
                 {$buyer_sql}
                 {$vi_cols}
                 l.local_ledger_id AS _keep
@@ -1899,7 +1902,8 @@ class TGS_BCTK_Report
                 COALESCE(pe.local_ledger_person_address, '')   AS kh_dchi,
                 COALESCE(pe.local_ledger_person_email, '')     AS kh_email,
                 {$mst_expr}                                    AS kh_mst,
-                JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label')) AS httt,
+                COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label_htsoft')), ''),
+                         JSON_UNQUOTE(JSON_EXTRACT(mt.local_ledger_meta_value, '$.payment_method_label'))) AS httt,
                 {$buyer_sql}
                 {$vi_cols}
                 q.id AS _keep
