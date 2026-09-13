@@ -2822,8 +2822,20 @@ class TGS_BCTK_Ajax
                 ]);
             }
 
+            // ─── ĐẨY GHI CHÚ LÊN HTsoft (BANHOADON.DIENGIAI) — đang ở switch_to_blog(shop) ───
+            // Đơn mã BT (chưa đẩy) / site tắt đẩy -> no-op. Lỗi chỉ log, không chặn lưu ghi chú.
+            $htsoft_note_warning = '';
+            if (class_exists('TGS_POS_HTsoft_Invoice_Push')) {
+                $hn = TGS_POS_HTsoft_Invoice_Push::push_invoice_note($sale_id);
+                if (empty($hn['ok'])) {
+                    $htsoft_note_warning = (string) ($hn['error'] ?? 'Chưa cập nhật được ghi chú lên HTsoft.');
+                }
+            }
+
             if ($switched) { restore_current_blog(); $switched = false; }
-            wp_send_json_success(['ghi_chu' => $note, 'message' => 'Đã lưu ghi chú.']);
+            $out = ['ghi_chu' => $note, 'message' => 'Đã lưu ghi chú.'];
+            if ($htsoft_note_warning !== '') { $out['htsoft_warning'] = $htsoft_note_warning; }
+            wp_send_json_success($out);
         } finally {
             if ($switched) { restore_current_blog(); }
         }
